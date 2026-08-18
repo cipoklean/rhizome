@@ -11,6 +11,8 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: contracts
@@ -62,3 +64,23 @@ jobs:
           name: rhizome-anonymizer-artifacts
           path: contracts/target/dev/*.json
           if-no-files-found: error
+
+      # There is no local Cairo toolchain on this project's dev machine (see
+      # README), so the compiled class is published into the repo. That makes the
+      # exact deployed bytecode reviewable, and lets deployment run from
+      # starknet.js without Scarb.
+      - name: Publish compiled class to repo
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        working-directory: .
+        run: |
+          mkdir -p artifacts
+          cp contracts/target/dev/*.json artifacts/
+          if git diff --quiet -- artifacts; then
+            echo "artifacts unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts
+          git commit -m "ci: publish compiled anonymizer class [skip ci]"
+          git push
