@@ -4,6 +4,9 @@
   "description": "Prices what privacy costs on STRK20, then executes it: fee-aware tranche scheduling for private Vesu positions through its own anonymizer.",
   "main": "index.js",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "test": "node --test test/analysis.test.mjs",
     "analyze": "node scripts/analyze.mjs",
     "verify:facts": "node scripts/verify-facts.mjs"
@@ -21,6 +24,12 @@
     "@starknet-io/get-starknet-discovery": "6.0.3",
     "@starknet-io/get-starknet-wallet-standard": "6.0.3",
     "@starknet-io/types-js": "0.10.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "starknet": "10.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
   }
 }
