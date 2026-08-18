@@ -1,14 +1,20 @@
 {
   "name": "rhizome",
   "version": "1.0.0",
-  "description": "",
+  "description": "Prices what privacy costs on STRK20, then executes it: fee-aware tranche scheduling for private Vesu positions through its own anonymizer.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "verify:facts": "node scripts/verify-facts.mjs"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "starknet",
+    "strk20",
+    "privacy",
+    "cairo",
+    "vesu"
+  ],
+  "author": "cipoklean",
+  "license": "MIT",
   "dependencies": {
     "@starknet-io/get-starknet-discovery": "6.0.3",
     "@starknet-io/get-starknet-wallet-standard": "6.0.3",

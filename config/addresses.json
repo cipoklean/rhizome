@@ -1,0 +1,40 @@
+{
+  "$comment": "Verified on-chain, not copied from docs. Re-check with `npm run verify:facts`.",
+  "mainnet": {
+    "chainId": "SN_MAIN",
+    "rpc": [
+      "https://api.cartridge.gg/x/starknet/mainnet",
+      "https://rpc.starknet.lava.build"
+    ],
+    "strk20Pool": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+    "tokens": {
+      "STRK": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d"
+    },
+    "vesu": {
+      "poolName": "Genesis",
+      "poolId": "0x04dc4f0ca6ea4961e4c8373265bfd5317678f4fe374d76f3fd7135f57763bf28",
+      "vTokens": {
+        "STRK": "0x0147ae3337b168ac9abe80a7214f0cb9e874b25c3db530a8e04beb98a134e07a"
+      }
+    },
+    "observed": {
+      "feeAmountWei": "6000000000000000000",
+      "feeNote": "Flat pool fee, deducted from the deposited amount. To end up with N shielded you deposit N + 6.",
+      "observedAtBlock": 13497523
+    },
+    "anonymizer": null
+  },
+  "sepolia": {
+    "chainId": "SN_SEPOLIA",
+    "rpc": [
+      "https://api.cartridge.gg/x/starknet/sepolia",
+      "https://starknet-sepolia.drpc.org"
+    ],
+    "strk20Pool": "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+    "observed": {
+      "feeAmountWei": "2000000000000000000",
+      "observedAtBlock": 13672191
+    },
+    "anonymizer": null
+  }
+}
