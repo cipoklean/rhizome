@@ -1,0 +1,13 @@
+node_modules/
+.next/
+dist/
+out/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+
+# Cairo / Scarb
+target/
+.snfoundry_cache/
