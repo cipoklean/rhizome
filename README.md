@@ -46,6 +46,39 @@ position, one dashboard.
 
 Existing privacy-preflight tools tell a user they leaked. Rhizome prices the fix and executes it.
 
+## What the public data actually says
+
+Measured against the live mainnet pool, over **8,241 public STRK deposits** from
+1,641 distinct depositors:
+
+- **2,142 distinct amounts**, of which **1,615 are one-of-a-kind** — 75.4% of
+  deposit amounts are unique fingerprints.
+- Organic cover exists at round denominations: 4 STRK (787 deposits), 3,000 (395),
+  2,000 (229), 1,500 (176), 10 (131).
+- So the *amount you pick* dominates whether your public legs are correlatable,
+  and most users are picking amounts nobody else has ever used.
+
+The frontier for a 50,000 STRK position, computed from that data at the live fee:
+
+| legs | fee cost | fee % | worst distinctiveness | smallest cohort |
+| ---: | -------: | ----: | --------------------: | --------------: |
+|    1 |        6 | 0.01% |                0.3333 |               2 |
+|    2 |       12 | 0.02% |                0.2000 |               4 |
+|   10 |       60 | 0.12% |                0.0345 |              28 |
+|   17 |      102 | 0.20% |                0.0043 |             229 |
+
+Ten legs of 5,000 STRK costs 0.12% of the position and puts every leg in a cohort
+of 28. Seventeen legs reaches a cohort of 229 for 0.20%. For a 100 STRK position
+the same analysis says **do not split** — one leg already sits in a cohort of 78,
+and a second leg would cost 12% of the position to buy nothing.
+
+That asymmetry is the product. Run it yourself:
+
+```sh
+npm run analyze -- mainnet 50000
+npm run verify:facts
+```
+
 ## Hidden vs. visible
 
 Being precise about this matters more than the pitch.

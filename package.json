@@ -4,6 +4,8 @@
   "description": "Prices what privacy costs on STRK20, then executes it: fee-aware tranche scheduling for private Vesu positions through its own anonymizer.",
   "main": "index.js",
   "scripts": {
+    "test": "node --test test/analysis.test.mjs",
+    "analyze": "node scripts/analyze.mjs",
     "verify:facts": "node scripts/verify-facts.mjs"
   },
   "keywords": [

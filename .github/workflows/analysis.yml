@@ -1,0 +1,34 @@
+name: analysis
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/**"
+      - "package.json"
+      - ".github/workflows/analysis.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      # Proves the analysis runs against the live mainnet pool, not just fixtures.
+      # Network-dependent, so it must not fail the build on an RPC hiccup.
+      - name: Smoke test against live mainnet pool
+        continue-on-error: true
+        run: npm run analyze -- mainnet 5000
