@@ -74,7 +74,9 @@ jobs:
         working-directory: .
         run: |
           mkdir -p artifacts
-          cp contracts/target/dev/*.json artifacts/
+          cp contracts/target/dev/rhizome_anonymizer_RhizomeVesuAnonymizer.contract_class.json artifacts/
+          cp contracts/target/dev/rhizome_anonymizer_RhizomeVesuAnonymizer.compiled_contract_class.json artifacts/
+          cp contracts/target/dev/rhizome_anonymizer.starknet_artifacts.json artifacts/
           git add artifacts
           if git diff --cached --quiet -- artifacts; then
             echo "artifacts unchanged"
