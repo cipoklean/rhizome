@@ -10,6 +10,8 @@
 // UNAUDITED. Funds are held only transiently, inside a single atomic pool
 // transaction: if any step reverts, nothing moves.
 
+pub mod mocks;
+
 use privacy::objects::OpenNoteDeposit;
 use starknet::ContractAddress;
 
