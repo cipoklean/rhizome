@@ -31,6 +31,8 @@
       "https://starknet-sepolia.drpc.org"
     ],
     "strk20Pool": "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+    "accountClassHash": "0xd632f69c8e02ea43f1d8a7c3eb441c67eb935f460c02e3860f7c410115d10f",
+    "accountClassNote": "Single-key account, constructor(public_key_). Discovered from live Sepolia accounts and verified to expose __validate__/__execute__.",
     "observed": {
       "feeAmountWei": "2000000000000000000",
       "observedAtBlock": 13672191
