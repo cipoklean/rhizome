@@ -1,0 +1,50 @@
+name: cairo
+
+on:
+  push:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/cairo.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Scarb
+        uses: software-mansion/setup-scarb@v1
+        with:
+          scarb-version: "2.18.0"
+
+      - name: Set up Starknet Foundry
+        uses: foundry-rs/setup-snfoundry@v3
+        with:
+          starknet-foundry-version: "0.63.0"
+
+      - name: Versions
+        run: |
+          scarb --version
+          snforge --version
+
+      - name: Build
+        run: scarb build
+
+      - name: Test
+        run: snforge test
+
+      - name: Format check
+        continue-on-error: true
+        run: scarb fmt --check
+
+      - name: Upload compiled artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rhizome-anonymizer-artifacts
+          path: contracts/target/dev/*.json
+          if-no-files-found: error
