@@ -36,7 +36,21 @@ jobs:
         run: scarb build
 
       - name: Test
-        run: snforge test
+        run: |
+          set -o pipefail
+          snforge test | tee /tmp/snforge.log
+          passed=$(grep -oE 'Tests: [0-9]+ passed' /tmp/snforge.log | head -1 | grep -oE '[0-9]+' | head -1)
+          failed=$(grep -oE '[0-9]+ failed' /tmp/snforge.log | head -1 | grep -oE '[0-9]+' | head -1)
+          echo "parsed: passed=${passed:-0} failed=${failed:-unknown}"
+          echo "### Cairo tests: ${passed:-0} passed" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${passed:-0}" -lt 6 ]; then
+            echo "::error::expected at least 6 passing tests, parsed ${passed:-0}"
+            exit 1
+          fi
+          if [ "${failed:-0}" -ne 0 ]; then
+            echo "::error::${failed} test(s) failed"
+            exit 1
+          fi
 
       - name: Format check
         continue-on-error: true
