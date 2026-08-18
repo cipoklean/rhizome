@@ -75,12 +75,12 @@ jobs:
         run: |
           mkdir -p artifacts
           cp contracts/target/dev/*.json artifacts/
-          if git diff --quiet -- artifacts; then
+          git add artifacts
+          if git diff --cached --quiet -- artifacts; then
             echo "artifacts unchanged"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add artifacts
           git commit -m "ci: publish compiled anonymizer class [skip ci]"
           git push
