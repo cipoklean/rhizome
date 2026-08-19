@@ -1,11 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// base is set for GitHub Pages (served from /rhizome/). Override with
-// VITE_BASE=/ for local or root-domain hosting.
+// Served from the domain root by default (Vercel, Netlify, local preview).
+// GitHub Pages serves from /<repo>/, so that workflow sets VITE_BASE=/rhizome/.
 export default defineConfig({
   plugins: [react()],
-  base: process.env.VITE_BASE ?? "/rhizome/",
+  base: process.env.VITE_BASE ?? "/",
   build: {
     outDir: "dist",
     target: "es2022",
