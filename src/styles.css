@@ -317,6 +317,38 @@ section.band:first-of-type {
   background: linear-gradient(90deg, var(--orange-d), var(--orange));
 }
 
+/* The exit leg, drawn under the entry leg: same scale, dimmer, so the
+   asymmetry between shielding an amount and withdrawing it is visible at a
+   glance rather than only in the table. */
+.bar-stack {
+  display: grid;
+  gap: 4px;
+}
+
+.bar-track.thin {
+  height: 7px;
+}
+
+.bar-fill.exit {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--orange-d) 0 3px,
+    rgba(160, 42, 0, 0.25) 3px 6px
+  );
+}
+
+.bar-legend {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-top: 26px;
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
 /* ---------- controls ---------- */
 
 .controls {

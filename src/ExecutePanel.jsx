@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { FEE_MODELS } from "./lib/frontier.mjs";
 import {
   OPERATION,
   buildTrancheActions,
@@ -19,7 +20,7 @@ import { formatUnits } from "./lib/units.mjs";
  * so `strk20PrepareInvoke` — which builds and proves without submitting — is the
  * only sane way to find a mistake.
  */
-export default function ExecutePanel({ net, network, schedule, token }) {
+export default function ExecutePanel({ net, network, schedule, token, fee, feeModel }) {
   const [wallets, setWallets] = useState(null);
   const [account, setAccount] = useState(null);
   const [support, setSupport] = useState(null);
@@ -128,8 +129,19 @@ export default function ExecutePanel({ net, network, schedule, token }) {
       <h2>Run the schedule.</h2>
       <p className="lede">
         The wallet holds the viewing key, discovers the notes, proves the transaction and submits it.
-        Rhizome only describes the actions. Every leg is one pool transaction, so every leg costs one
-        flat fee — which is why nothing here submits until a dry run has passed.
+        Rhizome only describes the actions. The pool fee is charged per{" "}
+        <span className="mono">apply_actions</span> call — once per pool transaction, whatever that
+        transaction does — which is why nothing here submits until a dry run has passed.
+        {fee && schedule?.length > 0 && (
+          <>
+            {" "}
+            This schedule is {schedule.length} leg{schedule.length === 1 ? "" : "s"} ×{" "}
+            {FEE_MODELS[feeModel]?.txPerLeg ?? 1} transaction
+            {(FEE_MODELS[feeModel]?.txPerLeg ?? 1) === 1 ? "" : "s"} ={" "}
+            {strk(fee * BigInt(schedule.length * (FEE_MODELS[feeModel]?.txPerLeg ?? 1)))} STRK in pool
+            fees.
+          </>
+        )}
       </p>
 
       {!deployed && (
@@ -218,7 +230,8 @@ export default function ExecutePanel({ net, network, schedule, token }) {
                 <tr>
                   <th>Leg</th>
                   <th>Amount</th>
-                  <th>Cohort</th>
+                  <th>Entry cohort</th>
+                  <th>Exit cohort</th>
                   <th>Run</th>
                 </tr>
               </thead>
@@ -227,7 +240,8 @@ export default function ExecutePanel({ net, network, schedule, token }) {
                   <tr key={i}>
                     <td>{i + 1}</td>
                     <td>{strk(leg.amount)} STRK</td>
-                    <td>{leg.cohort}</td>
+                    <td>{leg.entryCohort ?? leg.cohort}</td>
+                    <td>{leg.exitKnown ? leg.exitCohort : "?"}</td>
                     <td>
                       <button
                         type="button"
