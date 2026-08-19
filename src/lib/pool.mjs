@@ -204,29 +204,54 @@ export async function fetchFeeHistory(provider, poolAddress, { fromBlock = 0, to
  * all STRK withdrawals. Treating them as cover would invent an enormous cohort
  * at 4 and 6 STRK that no user position ever occupies.
  *
- * A leg is classified as fee reimbursement when its amount equals a fee the
- * pool has actually charged *and* its destination is a fee router — an address
- * that collects such legs in bulk. Both conditions are derived from chain data,
- * never hardcoded: the routers are whichever destinations account for
- * `routerShare` or more of the fee-sized legs.
+ * A leg is fee reimbursement when its amount equals a fee the pool has actually
+ * charged *and* its destination looks like a fee router. Both conditions come
+ * from chain data, never a hardcoded address.
+ *
+ * "Looks like a fee router" needs two tests, not one. Volume alone is too loose:
+ * on Sepolia the busiest fee-sized destination has only 32% fee-sized traffic,
+ * so most of its legs are something else and there is no way to tell which are
+ * which — while the real mainnet router is 99% fee-sized, because being
+ * reimbursed is the only thing it does. So a router must both receive a
+ * meaningful share of all fee-sized legs (`routerShare`) and have almost nothing
+ * else in its own traffic (`minRouterPurity`). Where that is ambiguous, Rhizome
+ * keeps the legs and lets the cohort be honest rather than inventing a filter.
  */
-export function classifyWithdrawals(withdrawals, feeHistory, { routerShare = 0.02 } = {}) {
+export function classifyWithdrawals(
+  withdrawals,
+  feeHistory,
+  { routerShare = 0.02, minRouterPurity = 0.8 } = {},
+) {
   const feeAmounts = new Set(feeHistory.map((f) => f.feeAmount).filter((f) => f > 0n));
 
-  const feeSized = withdrawals.filter((w) => feeAmounts.has(w.amount));
-  const byDestination = new Map();
-  for (const w of feeSized) byDestination.set(w.to, (byDestination.get(w.to) ?? 0) + 1);
+  const totalByDestination = new Map();
+  const feeSizedByDestination = new Map();
+  let feeSizedTotal = 0;
+  for (const w of withdrawals) {
+    totalByDestination.set(w.to, (totalByDestination.get(w.to) ?? 0) + 1);
+    if (feeAmounts.has(w.amount)) {
+      feeSizedByDestination.set(w.to, (feeSizedByDestination.get(w.to) ?? 0) + 1);
+      feeSizedTotal += 1;
+    }
+  }
 
-  const threshold = Math.max(1, Math.floor(feeSized.length * routerShare));
-  const routers = new Set(
-    [...byDestination.entries()].filter(([, n]) => n >= threshold).map(([to]) => to),
-  );
+  const threshold = Math.max(1, Math.floor(feeSizedTotal * routerShare));
+  const routerStats = [...feeSizedByDestination.entries()]
+    .map(([to, feeSized]) => {
+      const total = totalByDestination.get(to) ?? feeSized;
+      return { to, feeSized, total, purity: feeSized / total };
+    })
+    .filter((r) => r.feeSized >= threshold && r.purity >= minRouterPurity)
+    .sort((a, b) => b.feeSized - a.feeSized);
 
+  const routers = new Set(routerStats.map((r) => r.to));
   const isFeeLeg = (w) => feeAmounts.has(w.amount) && routers.has(w.to);
+
   return {
     positions: withdrawals.filter((w) => !isFeeLeg(w)),
     feeLegs: withdrawals.filter(isFeeLeg),
     routers: [...routers],
+    routerStats,
     feeAmounts: [...feeAmounts],
   };
 }

@@ -255,6 +255,37 @@ test("fee-reimbursement withdrawals are separated from position withdrawals", ()
   assert.ok(positions.some((w) => w.amount === STRK(6) && w.to === USER));
 });
 
+test("a busy address is not a fee router unless fee legs are nearly all it does", () => {
+  // Measured on Sepolia: the busiest fee-sized destination has only ~32% fee-sized
+  // traffic, so which of its legs are reimbursement is unknowable. The mainnet
+  // router is 99%. Keep the ambiguous legs rather than inventing a filter.
+  const MIXED = "0x75a180e1";
+  const ROUTER = "0x127021a1";
+  const feeHistory = [{ feeAmount: STRK(6), blockNumber: 1 }];
+
+  const withdrawals = [
+    ...Array.from({ length: 315 }, () => ({ amount: STRK(6), to: MIXED })),
+    ...Array.from({ length: 670 }, (_, i) => ({ amount: STRK(100 + i), to: MIXED })),
+    ...Array.from({ length: 400 }, () => ({ amount: STRK(6), to: ROUTER })),
+  ];
+
+  const { routers, routerStats, feeLegs } = classifyWithdrawals(withdrawals, feeHistory);
+  assert.deepEqual(routers, [ROUTER], "only the pure destination is a router");
+  assert.equal(feeLegs.length, 400, "the mixed address keeps its legs");
+  assert.equal(routerStats[0].purity, 1);
+});
+
+test("purity alone is not enough — a router must also carry volume", () => {
+  const feeHistory = [{ feeAmount: STRK(6), blockNumber: 1 }];
+  const withdrawals = [
+    ...Array.from({ length: 1000 }, () => ({ amount: STRK(6), to: "0xrouter" })),
+    // One user who happens to have withdrawn the fee amount once, and nothing else.
+    { amount: STRK(6), to: "0xuser" },
+  ];
+  const { routers } = classifyWithdrawals(withdrawals, feeHistory);
+  assert.deepEqual(routers, ["0xrouter"]);
+});
+
 test("a zero fee is never treated as a fee leg", () => {
   const withdrawals = [{ amount: 0n, to: "0xrouter" }, { amount: STRK(5), to: "0xrouter" }];
   const { positions, feeLegs } = classifyWithdrawals(withdrawals, [{ feeAmount: 0n, blockNumber: 1 }]);
