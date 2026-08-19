@@ -19,8 +19,17 @@
     },
     "observed": {
       "feeAmountWei": "6000000000000000000",
-      "feeNote": "Flat pool fee, deducted from the deposited amount. To end up with N shielded you deposit N + 6.",
-      "observedAtBlock": 13497523
+      "feeToken": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+      "feeCollector": "0xd79041634625e5288296fbc648088788710ba44903a3a49468a66567749e77",
+      "feeNote": "Charged per apply_actions call — once per pool transaction, whatever the transaction does — and always in STRK regardless of the token being shielded. Verified in privacy.cairo (collect_fee) and on receipts: a fee router fronts the fee to the collector, and the pool reimburses it with an extra withdraw leg out of the user's shielded balance in the same transaction.",
+      "feeRouter": "0x127021a1b5a52d3174c2ab077c2b043c80369250d29428cee956d76ee51584f",
+      "feeRouterNote": "Fronts the fee and is repaid by a pool Withdrawal of the identical amount. That reimbursement is a public Withdrawal event, so 76.1% of all public STRK withdrawals are fee legs rather than anyone's position — see classifyWithdrawals in src/lib/pool.mjs.",
+      "feeHistory": [
+        { "fromBlock": 0, "feeAmountWei": "0" },
+        { "fromBlock": 9079357, "feeAmountWei": "4000000000000000000" },
+        { "fromBlock": 12806094, "feeAmountWei": "6000000000000000000" }
+      ],
+      "observedAtBlock": 13541710
     },
     "anonymizer": null
   },
@@ -35,7 +44,13 @@
     "accountClassNote": "Single-key account, constructor(public_key_). Discovered from live Sepolia accounts and verified to expose __validate__/__execute__.",
     "observed": {
       "feeAmountWei": "2000000000000000000",
-      "observedAtBlock": 13672191
+      "feeToken": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+      "feeCollector": "0x3e6c6f41d833ec5e7d38e6007df5b0ab6b48bc4c2d3dbeac1ed665456ae4766",
+      "feeHistory": [
+        { "fromBlock": 0, "feeAmountWei": "0" },
+        { "fromBlock": 12875245, "feeAmountWei": "2000000000000000000" }
+      ],
+      "observedAtBlock": 13717119
     },
     "anonymizer": "0x552d747e90eb70e52e9c5f9d9150b97e46ac9b25989a36e7eee96a2e45c5e20",
     "anonymizerClassHash": "0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a"

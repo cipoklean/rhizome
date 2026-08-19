@@ -7,18 +7,25 @@
 //
 // Exits non-zero if anything drifted from config/addresses.json.
 
-import { readFileSync } from "node:fs";
-import { RpcProvider } from "starknet";
+import { existsSync, readFileSync } from "node:fs";
+import { RpcProvider, hash } from "starknet";
+import { classifyWithdrawals, fetchFeeHistory, fetchWithdrawals } from "../src/lib/pool.mjs";
 
 const cfg = JSON.parse(readFileSync(new URL("../config/addresses.json", import.meta.url)));
+const SIERRA = new URL(
+  "../artifacts/rhizome_anonymizer_RhizomeVesuAnonymizer.contract_class.json",
+  import.meta.url,
+);
 
 const fmt = (wei, decimals = 18) => Number(BigInt(wei)) / 10 ** decimals;
+const same = (a, b) => BigInt(a) === BigInt(b);
 
 let failures = 0;
 const check = (label, ok, detail) => {
   console.log(`${ok ? "  ok  " : " FAIL "} ${label}${detail ? ` — ${detail}` : ""}`);
   if (!ok) failures++;
 };
+const skip = (label, why) => console.log(`  ..   ${label} — ${why}`);
 
 /** First RPC in the list that responds. */
 async function connect(urls) {
@@ -57,7 +64,7 @@ for (const [network, net] of Object.entries(cfg).filter(([k]) => k !== "$comment
     const live = BigInt(raw).toString();
     const expected = net.observed.feeAmountWei;
     check(
-      `pool fee = ${fmt(live)} tokens`,
+      `pool fee = ${fmt(live)} STRK per pool transaction`,
       live === expected,
       live === expected ? undefined : `config says ${fmt(expected)}, chain says ${fmt(live)}`,
     );
@@ -65,7 +72,83 @@ for (const [network, net] of Object.entries(cfg).filter(([k]) => k !== "$comment
     check("pool get_fee_amount", false, e.message);
   }
 
-  // 2. The Vesu vault really is an ERC-4626 over the token we think it is.
+  // 2. Who the fee is paid to. Rhizome's fee-leg filter depends on this being
+  //    the address the pool actually uses.
+  if (net.observed.feeCollector) {
+    try {
+      const [live] = await callFn(provider, net.strk20Pool, "get_fee_collector");
+      check(
+        "fee collector matches config",
+        same(live, net.observed.feeCollector),
+        same(live, net.observed.feeCollector) ? undefined : `chain says ${live}`,
+      );
+    } catch (e) {
+      check("pool get_fee_collector", false, e.message);
+    }
+  } else {
+    skip("fee collector", "not recorded in config");
+  }
+
+  // 3. The fee history. The fee is admin-settable, so the schedule of what it
+  //    has been is as load-bearing as what it is now — old cohort data was
+  //    priced differently, and some of it was priced at zero.
+  if (net.observed.feeHistory) {
+    try {
+      const live = await fetchFeeHistory(provider, net.strk20Pool);
+      // config carries an explicit leading zero-fee epoch that emits no event.
+      const expected = net.observed.feeHistory.filter((h) => BigInt(h.feeAmountWei) > 0n);
+      const matches =
+        live.length === expected.length &&
+        live.every(
+          (h, i) =>
+            h.blockNumber === expected[i].fromBlock &&
+            h.feeAmount === BigInt(expected[i].feeAmountWei),
+        );
+      check(
+        `fee history: ${live.map((h) => `${fmt(h.feeAmount)} @ ${h.blockNumber}`).join(" -> ") || "never set"}`,
+        matches,
+        matches ? undefined : `config expects ${expected.length} change(s), chain has ${live.length}`,
+      );
+    } catch (e) {
+      check("fee history", false, e.message);
+    }
+  } else {
+    skip("fee history", "not recorded in config");
+  }
+
+  // 4. The fee router. Every priced pool transaction reimburses it with a public
+  //    Withdrawal of exactly the fee, which is why most public withdrawals are
+  //    not positions. If this stops being true, the exit-side cohort numbers are
+  //    wrong and the analysis must not quietly keep filtering.
+  if (net.observed.feeRouter && net.tokens?.STRK) {
+    try {
+      const fromBlock = Math.max(0, block - 200000);
+      const history = await fetchFeeHistory(provider, net.strk20Pool);
+      const recent = await fetchWithdrawals(provider, net.strk20Pool, {
+        token: net.tokens.STRK,
+        fromBlock,
+      });
+      if (recent.length === 0) {
+        skip("fee router", `no STRK withdrawals since block ${fromBlock}`);
+      } else {
+        const { feeLegs, routers } = classifyWithdrawals(recent, history);
+        const share = (feeLegs.length / recent.length) * 100;
+        check(
+          `fee router is the dominant fee-leg destination (${share.toFixed(1)}% of ${recent.length} recent STRK withdrawals)`,
+          routers.some((r) => same(r, net.observed.feeRouter)),
+          routers.length === 0
+            ? "no fee-sized legs found at all"
+            : `derived routers: ${routers.join(", ")}`,
+        );
+      }
+    } catch (e) {
+      check("fee router", false, e.message);
+    }
+  } else {
+    skip("fee router", "not recorded in config");
+  }
+
+  // 5. The Vesu vault really is an ERC-4626 over the token we think it is.
   const vToken = net.vesu?.vTokens?.STRK;
   if (vToken) {
     try {
@@ -73,8 +156,8 @@ for (const [network, net] of Object.entries(cfg).filter(([k]) => k !== "$comment
       const expectedAsset = net.tokens.STRK;
       check(
         "vSTRK.asset() is STRK",
-        BigInt(assetAddr) === BigInt(expectedAsset),
-        BigInt(assetAddr) === BigInt(expectedAsset) ? undefined : `got ${assetAddr}`,
+        same(assetAddr, expectedAsset),
+        same(assetAddr, expectedAsset) ? undefined : `got ${assetAddr}`,
       );
 
       const cls = await provider.getClassAt(vToken);
@@ -94,25 +177,43 @@ for (const [network, net] of Object.entries(cfg).filter(([k]) => k !== "$comment
     }
   }
 
-  // 3. Our anonymizer, once deployed, must not be on the pool's blocklist.
+  // 6. Our anonymizer: deployed from the class in artifacts/, and not blocked.
   if (net.anonymizer) {
     try {
-      const [blocked] = await callFn(
-        provider,
-        net.strk20Pool,
-        "is_open_note_depositor_blocked",
-        [net.anonymizer],
-      );
+      const liveClass = await provider.getClassHashAt(net.anonymizer);
+      if (net.anonymizerClassHash) {
+        check(
+          "deployed class hash matches config",
+          same(liveClass, net.anonymizerClassHash),
+          same(liveClass, net.anonymizerClassHash) ? undefined : `chain says ${liveClass}`,
+        );
+      }
+      if (existsSync(SIERRA)) {
+        const computed = hash.computeContractClassHash(JSON.parse(readFileSync(SIERRA)));
+        check(
+          "deployed class is the class in artifacts/",
+          same(liveClass, computed),
+          same(liveClass, computed) ? undefined : `artifact hashes to ${computed}`,
+        );
+      } else {
+        skip("artifact class hash", "artifacts/ not present");
+      }
+    } catch (e) {
+      check("anonymizer class hash", false, e.message);
+    }
+
+    try {
+      const [blocked] = await callFn(provider, net.strk20Pool, "is_open_note_depositor_blocked", [
+        net.anonymizer,
+      ]);
       check("anonymizer not blocked as open-note depositor", BigInt(blocked) === 0n);
     } catch (e) {
       check("blocklist check", false, e.message);
     }
   } else {
-    console.log("  ..   anonymizer not deployed yet, skipping blocklist check");
+    skip("anonymizer", "not deployed on this network yet");
   }
 }
 
-console.log(
-  failures === 0 ? "\nAll facts verified.\n" : `\n${failures} check(s) failed.\n`,
-);
+console.log(failures === 0 ? "\nAll facts verified.\n" : `\n${failures} check(s) failed.\n`);
 process.exit(failures === 0 ? 0 : 1);

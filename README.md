@@ -16,29 +16,55 @@ its amount and its timing. The protocol documentation is explicit that this is u
 > A distinctive amount executed shortly after a distinctive deposit is correlatable.
 
 The obvious fix is to split one position into several smaller, less distinctive tranches spread
-over time. The obvious fix is also expensive: the pool charges a **flat fee per private
-operation**, and the protocol permits **at most one external invoke per pool transaction**, so
-every tranche is a separate transaction and a separate fee.
+over time. The obvious fix is also expensive, and it is more expensive than it first looks.
 
-Measured on mainnet at block 13494196:
+## What the fee actually is
+
+The pool charges a flat fee **per `apply_actions` call** — once per pool transaction, whatever
+that transaction does — and always in **STRK**, whichever token you are shielding. Verified in
+the protocol source and on mainnet receipts:
+
+```cairo
+/// Fee amount (in FRI) charged per `apply_actions` call.
+fee_amount: u128,
+
+fn collect_fee(ref self: ContractState) { ... }   // privacy.cairo
+```
 
 ```
-get_fee_amount => 6000000000000000000   (6 STRK)
+get_fee_amount   => 6000000000000000000   (6 STRK)
+get_fee_collector => 0xd79041634625e5288296fbc648088788710ba44903a3a49468a66567749e77
 ```
 
-Ten tranches on a 100 STRK position costs 60 STRK in fees. Splitting is not free, and for small
-positions it is irrational.
+Three consequences the earlier version of this README got wrong:
+
+1. **It is per transaction, not per tranche.** The protocol permits at most one external invoke
+   per pool transaction, and keeping a public deposit unlinked from the venue action it funds
+   means shielding in an earlier, separate transaction. So one tranche is **two** pool
+   transactions going in, and two more coming back out. A ten-leg schedule is 20 fees to enter
+   and 40 across the round trip — not 10.
+2. **It is settled by an extra public withdrawal.** A fee router fronts the fee to the collector
+   and the pool reimburses it, in the same transaction, with a `Withdrawal` of exactly the fee
+   amount. Every priced pool transaction therefore emits a public withdrawal leg that belongs to
+   nobody's position. On mainnet those legs are **76.1%** of all public STRK withdrawals — so any
+   exit-side analysis that does not filter them is three-quarters noise.
+3. **The fee has changed, twice.** It ran at zero until block 9,079,357, then 4 STRK, then 6 STRK
+   from block 12,806,094. Nothing in this repo hardcodes it; `npm run verify:facts` re-reads the
+   whole history and fails if it drifted.
 
 ## What Rhizome does
 
 Rhizome treats unlinkability as something with a price, and computes it.
 
-1. **Reads the live fee** from the pool rather than assuming it.
-2. **Reads public cohort data** — the pool's own `Deposit` events and venue deposit amounts are
-   public — to find amounts that blend in rather than stand out.
-3. **Computes the frontier**: for a given position size, what tranche count buys meaningful
-   unlinkability, and what it costs in fees. Sometimes the honest answer is "one tranche".
-4. **Executes the chosen schedule** through its own anonymizer contract, each tranche landing in
+1. **Reads the live fee and its history** from the pool rather than assuming it.
+2. **Reads both public legs** — the pool's own `Deposit` *and* `Withdrawal` events — to find
+   amounts that blend in rather than stand out, after excluding fee reimbursement.
+3. **Scores every amount on its weaker side.** An attacker who cannot place your deposit will
+   place your withdrawal instead, and only needs one of them.
+4. **Computes the frontier**: for a given position size, what tranche count buys meaningful
+   unlinkability, and what it costs in fees — priced per pool transaction, with the full round
+   trip shown alongside. Sometimes the honest answer is "one tranche".
+5. **Executes the chosen schedule** through its own anonymizer contract, each tranche landing in
    its own note.
 
 Externally: several indistinguishable deposits with no shared fingerprint. Internally: one
@@ -48,34 +74,57 @@ Existing privacy-preflight tools tell a user they leaked. Rhizome prices the fix
 
 ## What the public data actually says
 
-Measured against the live mainnet pool, over **8,241 public STRK deposits** from
-1,641 distinct depositors:
+Measured against the live mainnet pool at block 13,541,710:
 
-- **2,142 distinct amounts**, of which **1,615 are one-of-a-kind** — 75.4% of
-  deposit amounts are unique fingerprints.
-- Organic cover exists at round denominations: 4 STRK (787 deposits), 3,000 (395),
-  2,000 (229), 1,500 (176), 10 (131).
-- So the *amount you pick* dominates whether your public legs are correlatable,
-  and most users are picking amounts nobody else has ever used.
+| | entry (`Deposit`) | exit (`Withdrawal`) |
+| --- | ---: | ---: |
+| legs | 8,256 | 4,806 |
+| counterparties | 1,648 depositors | 789 destinations |
+| distinct amounts | 2,144 | 2,833 |
+| one-of-a-kind amounts | 1,617 (**75.4%**) | 2,303 (**81.3%**) |
 
-The frontier for a 50,000 STRK position, computed from that data at the live fee:
+The exit side is read from 20,082 public STRK withdrawals, 15,276 of which (76.1%) are fee
+reimbursement to a single router and are excluded.
 
-| legs | fee cost | fee % | worst distinctiveness | smallest cohort |
-| ---: | -------: | ----: | --------------------: | --------------: |
-|    1 |        6 | 0.01% |                0.3333 |               2 |
-|    2 |       12 | 0.02% |                0.2000 |               4 |
-|   10 |       60 | 0.12% |                0.0345 |              28 |
-|   17 |      102 | 0.20% |                0.0043 |             229 |
+**Cover is not symmetric, and that is the finding.** The most-deposited amounts in the pool are
+not the amounts people withdraw:
 
-Ten legs of 5,000 STRK costs 0.12% of the position and puts every leg in a cohort
-of 28. Seventeen legs reaches a cohort of 229 for 0.20%. For a 100 STRK position
-the same analysis says **do not split** — one leg already sits in a cohort of 78,
-and a second leg would cost 12% of the position to buy nothing.
+| amount | entry cohort | exit cohort | weaker side |
+| ---: | ---: | ---: | ---: |
+| 4 STRK | 787 | 20 | 20 |
+| 3,000 | 395 | 31 | 31 |
+| 2,000 | 229 | 11 | 11 |
+| 4.1 | 149 | **0** | **0** |
+| 4.15 | 103 | **0** | **0** |
+
+An earlier version of this analysis ranked amounts on deposits alone. It rated 4.1 STRK among the
+best-covered denominations in the pool, on the strength of 149 deposits — for an amount that has
+never once been withdrawn. Every leg of that schedule would have had to leave the pool as a unique
+amount. Scoring the weaker side is the fix.
+
+The frontier for a 50,000 STRK position, computed from that data at the live fee, priced at two
+pool transactions per leg:
+
+| legs | pool tx | fee cost | fee % | entry cohort | exit cohort | weaker side |
+| ---: | ---: | -------: | ----: | -----------: | ----------: | ----------: |
+|    1 |       2 |       12 | 0.02% |            2 |           8 |           2 |
+|    8 |      16 |       96 | 0.19% |            5 |           5 |           5 |
+|   10 |      20 |      120 | 0.24% |           28 |           8 |           8 |
+|   13 |      26 |      156 | 0.31% |           28 |          11 |          11 |
+
+Thirteen legs — twelve of 4,000 and one of 2,000 — costs 156 STRK to enter, 0.31% of the
+position, and 312 STRK across the round trip. Nothing affordable reaches the target cover, so
+Rhizome says so rather than dressing the best available up as sufficient.
+
+For a 100 STRK position the same analysis says **do not split**: one leg already sits in cohorts
+of 78 in and 29 out, and the single pair of transactions needed to enter is already 12% of the
+position. Twenty-four percent to enter and exit.
 
 That asymmetry is the product. Run it yourself:
 
 ```sh
 npm run analyze -- mainnet 50000
+npm run analyze -- mainnet 50000 roundTrip
 npm run verify:facts
 ```
 
@@ -89,7 +138,8 @@ Being precise about this matters more than the pitch.
 | Withdrawal destination and amount | Which deposit a withdrawal came from |
 | Each tranche's amount and timing at the venue | Which tranches belong to the same position |
 | Open-note amounts (measured at execution time) | The owner of an open note |
-| That an address interacts with the pool | |
+| That an address interacts with the pool | The withdrawing user (encrypted to the auditor) |
+| One fee-sized withdrawal per pool transaction | Which of them was yours |
 
 Rhizome claims **identity privacy and reduced correlatability**. It does **not** claim amount
 privacy for the DeFi leg — that is not something the pool provides, and no scheduling strategy
@@ -97,8 +147,17 @@ can create it.
 
 ## Status
 
-Early. This section will carry the integration log, deployed addresses, and verified mainnet
-transactions as they land.
+Early. The analysis layer is complete and measured against mainnet; the anonymizer is deployed and
+verified on Sepolia; mainnet execution is not wired yet.
+
+| | |
+| --- | --- |
+| Sepolia anonymizer | `0x552d747e90eb70e52e9c5f9d9150b97e46ac9b25989a36e7eee96a2e45c5e20` |
+| Sepolia class hash | `0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a` |
+| Mainnet anonymizer | not deployed |
+
+`npm run verify:facts` checks the deployed class hash against the class committed in
+`artifacts/`, so the reviewed bytecode and the deployed bytecode are provably the same.
 
 ## Stack
 

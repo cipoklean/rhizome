@@ -1,20 +1,63 @@
 // The cost/unlinkability frontier.
 //
 // Splitting a position into several tranches reduces how distinctive each public
-// leg is. It also costs a flat pool fee per tranche, because the protocol allows
-// at most one external invoke per pool transaction — so N tranches is N
-// transactions is N fees.
+// leg is. It also costs a flat pool fee per *pool transaction*, and the protocol
+// allows at most one external invoke per transaction — so a schedule of N legs
+// is at least N transactions, and usually more than N.
 //
-// At the fee measured on mainnet (6 STRK, deducted from the deposit) that cost
-// is not marginal. This module refuses to pretend otherwise: for small positions
-// the honest recommendation is one tranche.
+// Two things this module refuses to fudge:
+//
+//   1. The fee is charged per `apply_actions` call, not per tranche. Getting a
+//      tranche into a venue takes two pool transactions if you want the deposit
+//      unlinked from the venue action, and unwinding it takes two more. Pricing
+//      a schedule at one fee per leg understates it by 2-4x.
+//   2. A leg is scored on its weaker end. Cover on the way in is not cover on
+//      the way out, and mainnet cover is wildly asymmetric.
+//
+// At the fee measured on mainnet (6 STRK per pool transaction) that cost is not
+// marginal. For small positions the honest recommendation is one tranche.
 
-import { cohortSize, distinctiveness, popularAmounts } from "./cohorts.mjs";
+import { coveredBothSides, roundTripCohort } from "./cohorts.mjs";
 
 /**
- * Build a schedule out of amounts that already have public cover.
+ * Pool transactions per tranche.
  *
- * Two earlier versions of this were wrong in instructive ways.
+ * The fee is per transaction, so this is the multiplier that turns a leg count
+ * into a bill. `bundled` is the cheap option and Rhizome does not recommend it:
+ * putting the deposit and the venue invoke in one transaction publishes "this
+ * address deposited X" in the same transaction as the venue action it paid for,
+ * which is the correlation the schedule exists to break.
+ */
+export const FEE_MODELS = {
+  bundled: {
+    txPerLeg: 1,
+    label: "deposit + invoke in one transaction",
+    note: "Cheapest, and it links your public deposit to the venue action. Priced for comparison, not recommended.",
+  },
+  enter: {
+    txPerLeg: 2,
+    label: "shield, then invoke separately",
+    note: "Shielding as its own earlier transaction leaves the venue action with no public leg to correlate against.",
+  },
+  roundTrip: {
+    txPerLeg: 4,
+    label: "shield, invoke, unwind, unshield",
+    note: "The full cost of holding and then exiting the position — the number that decides whether splitting was worth it.",
+  },
+};
+
+export const DEFAULT_FEE_MODEL = "enter";
+
+/** Accept either `{ entry, exit }` or a bare entry histogram. */
+function normalizeHistograms(hist) {
+  if (hist instanceof Map) return { entry: hist, exit: null };
+  return { entry: hist.entry, exit: hist.exit ?? null };
+}
+
+/**
+ * Build a schedule out of amounts that already have public cover on both legs.
+ *
+ * Three earlier versions of this were wrong in instructive ways.
  *
  * The first split the position evenly and let a final tranche absorb the
  * remainder. That remainder is almost always a one-of-a-kind amount, and since
@@ -24,26 +67,30 @@ import { cohortSize, distinctiveness, popularAmounts } from "./cohorts.mjs";
  * The second covered the position greedily largest-first. That minimises the
  * number of legs, which is the wrong objective — for 50,000 STRK it produced
  * 30,000 + 20,000 with cohorts of 5 and 4, when 16 x 3,000 + 2,000 was available
- * with cohorts of 395 and 229 for an extra 90 STRK in fees on a 50,000 position.
+ * with far better cover for an extra 90 STRK in fees on a 50,000 position.
+ *
+ * The third ranked on deposit cohorts alone, which put 4.1 STRK among the ten
+ * best-covered denominations in the pool on the strength of 149 deposits — an
+ * amount that has never once been withdrawn. Every leg of such a schedule would
+ * have had to leave the pool as a unique amount.
  *
  * So: try each well-covered amount as a repeating unit, cover any remainder from
- * other covered amounts, and keep whichever schedule maximises the *weakest*
- * cohort within the leg budget.
+ * other covered amounts, and keep whichever schedule maximises the *weakest
+ * cohort on the weaker side* within the leg budget.
  */
 export function buildSchedule(position, maxTranches, hist, { minCohort = 3, minTranche = 0n } = {}) {
-  const candidates = popularAmounts(hist, 500, { minCohort })
-    .filter((c) => c.amount >= minTranche && c.amount > 0n)
-    .sort((a, b) => b.cohort - a.cohort);
+  const { entry, exit } = normalizeHistograms(hist);
+
+  const candidates = coveredBothSides(entry, exit, 500, { minCohort })
+    .filter((c) => c.amount >= minTranche && c.amount > 0n);
 
   if (candidates.length === 0) return null;
   const bySizeDesc = [...candidates].sort((a, b) => (a.amount > b.amount ? -1 : 1));
 
-  const leg = (amount) => ({
-    amount,
-    cohort: cohortSize(hist, amount),
-    distinctiveness: distinctiveness(hist, amount),
-    covered: cohortSize(hist, amount) >= minCohort,
-  });
+  const leg = (amount) => {
+    const scored = roundTripCohort(entry, exit, amount);
+    return { ...scored, covered: scored.cohort >= minCohort };
+  };
 
   /** Cover `amount` exactly from covered denominations, largest first. */
   const coverRemainder = (amount, budget) => {
@@ -98,9 +145,10 @@ export function buildSchedule(position, maxTranches, hist, { minCohort = 3, minT
 /**
  * Score every tranche budget from 1..maxTranches.
  *
- * `worstDistinctiveness` is the weakest link: an attacker correlates on the most
- * identifiable tranche, so a schedule is only as good as its worst leg.
- * Averaging would flatter the result and mislead.
+ * `worstDistinctiveness` is the weakest link twice over: the most identifiable
+ * tranche, scored on its more exposed leg. An attacker only needs one end of one
+ * tranche, so a schedule is only as good as its worst leg. Averaging would
+ * flatter the result and mislead.
  */
 export function computeFrontier({
   position,
@@ -108,9 +156,13 @@ export function computeFrontier({
   hist,
   maxTranches = 24,
   minTranche = 0n,
+  feeModel = DEFAULT_FEE_MODEL,
 }) {
+  const model = FEE_MODELS[feeModel];
+  if (!model) throw new Error(`unknown fee model "${feeModel}"`);
+
   const rows = [];
-  let seen = new Set();
+  const seen = new Set();
 
   for (let n = 1; n <= maxTranches; n++) {
     const tranches = buildSchedule(position, n, hist, { minTranche });
@@ -122,20 +174,28 @@ export function computeFrontier({
     seen.add(key);
 
     const actual = tranches.length;
-    const feeCost = feeAmount * BigInt(actual);
+    const poolTransactions = actual * model.txPerLeg;
+    const feeCost = feeAmount * BigInt(poolTransactions);
     if (feeCost >= position) continue; // fees would eat the position
 
-    const worst = Math.max(...tranches.map((t) => t.distinctiveness));
-    const minCohort = Math.min(...tranches.map((t) => t.cohort));
+    const roundTripFeeCost = feeAmount * BigInt(actual * FEE_MODELS.roundTrip.txPerLeg);
+    const exitKnown = tranches.every((t) => t.exitKnown);
 
     rows.push({
       tranches: actual,
+      poolTransactions,
       feeCost,
       feeCostRatio: Number(feeCost) / Number(position),
-      worstDistinctiveness: worst,
-      minCohort,
+      roundTripFeeCost,
+      roundTripFeeCostRatio: Number(roundTripFeeCost) / Number(position),
+      worstDistinctiveness: Math.max(...tranches.map((t) => t.distinctiveness)),
+      minCohort: Math.min(...tranches.map((t) => t.cohort)),
+      minEntryCohort: Math.min(...tranches.map((t) => t.entryCohort)),
+      minExitCohort: exitKnown ? Math.min(...tranches.map((t) => t.exitCohort)) : null,
+      exitKnown,
       allCovered: tranches.every((t) => t.covered),
       schedule: tranches,
+      feeModel,
     });
   }
 
