@@ -148,18 +148,17 @@ for (const [network, net] of Object.entries(cfg).filter(([k]) => k !== "$comment
     skip("fee router", "not recorded in config");
   }
 
-  // 5. The Vesu vault really is an ERC-4626 over the token we think it is.
+  // 5. The venue. On mainnet that is a real Vesu vToken and must be an ERC-4626
+  //    over the token we think it is. On Sepolia it is our own 1:1 mock, because
+  //    Vesu is not deployed there — so check the surface the anonymizer actually
+  //    calls, and prove the deployed class is the mock we published rather than
+  //    asserting an ERC-4626 interface it never claimed to have.
   const vToken = net.vesu?.vTokens?.STRK;
+  const isMockVenue = net.vesu?.kind === "mock";
   if (vToken) {
     try {
-      const [assetAddr] = await callFn(provider, vToken, "asset");
-      const expectedAsset = net.tokens.STRK;
-      check(
-        "vSTRK.asset() is STRK",
-        same(assetAddr, expectedAsset),
-        same(assetAddr, expectedAsset) ? undefined : `got ${assetAddr}`,
-      );
-
+      // Everything `privacy_invoke` touches on the vault side.
+      const required = ["deposit", "withdraw", "balance_of", "approve"];
       const cls = await provider.getClassAt(vToken);
       const names = new Set();
       const walk = (items) => {
@@ -169,12 +168,52 @@ for (const [network, net] of Object.entries(cfg).filter(([k]) => k !== "$comment
         }
       };
       walk(cls.abi);
-      for (const fn of ["deposit", "withdraw", "balance_of", "approve", "convert_to_assets"]) {
-        check(`vSTRK exposes ${fn}()`, names.has(fn));
+
+      if (isMockVenue) {
+        console.log("  ..   venue is a declared test double (MockVesuVault), not an ERC-4626");
+        for (const fn of required) check(`mock vault exposes ${fn}()`, names.has(fn));
+
+        const liveClass = await provider.getClassHashAt(vToken);
+        if (net.vesu.classHash) {
+          check(
+            "mock vault class hash matches config",
+            same(liveClass, net.vesu.classHash),
+            same(liveClass, net.vesu.classHash) ? undefined : `chain says ${liveClass}`,
+          );
+        }
+        const mockSierra = new URL(
+          "../artifacts/rhizome_anonymizer_MockVesuVault.contract_class.json",
+          import.meta.url,
+        );
+        if (existsSync(mockSierra)) {
+          const computed = hash.computeContractClassHash(JSON.parse(readFileSync(mockSierra)));
+          check(
+            "mock vault is the class in artifacts/",
+            same(liveClass, computed),
+            same(liveClass, computed) ? undefined : `artifact hashes to ${computed}`,
+          );
+        }
+        // The mock stores its underlying without a getter, so this is the one
+        // fact about it that cannot be checked on-chain. Say so rather than
+        // implying it was verified.
+        console.log("  ..   mock vault's underlying token is not readable on-chain (no asset())");
+      } else {
+        const [assetAddr] = await callFn(provider, vToken, "asset");
+        const expectedAsset = net.tokens.STRK;
+        check(
+          "vSTRK.asset() is STRK",
+          same(assetAddr, expectedAsset),
+          same(assetAddr, expectedAsset) ? undefined : `got ${assetAddr}`,
+        );
+        for (const fn of [...required, "convert_to_assets"]) {
+          check(`vSTRK exposes ${fn}()`, names.has(fn));
+        }
       }
     } catch (e) {
-      check("vSTRK checks", false, e.message);
+      check("venue checks", false, e.message);
     }
+  } else {
+    skip("venue", "no vault configured for this network");
   }
 
   // 6. Our anonymizer: deployed from the class in artifacts/, and not blocked.

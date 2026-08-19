@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "node --test test/analysis.test.mjs test/timing.test.mjs",
     "analyze": "node scripts/analyze.mjs",
-    "verify:facts": "node scripts/verify-facts.mjs"
+    "verify:facts": "node scripts/verify-facts.mjs",
+    "deploy:test-vault": "node scripts/deploy-test-vault.mjs"
   },
   "keywords": [
     "starknet",

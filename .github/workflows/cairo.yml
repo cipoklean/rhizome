@@ -69,13 +69,20 @@ jobs:
       # README), so the compiled class is published into the repo. That makes the
       # exact deployed bytecode reviewable, and lets deployment run from
       # starknet.js without Scarb.
-      - name: Publish compiled class to repo
+      #
+      # MockVesuVault ships alongside it for one reason: Vesu has no Sepolia
+      # deployment, so rehearsing the vault leg on testnet needs a venue, and a
+      # 1:1 vault the snforge suite already exercises is the honest stand-in. It
+      # is a test double and is never referenced by mainnet config.
+      - name: Publish compiled classes to repo
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         working-directory: .
         run: |
           mkdir -p artifacts
-          cp contracts/target/dev/rhizome_anonymizer_RhizomeVesuAnonymizer.contract_class.json artifacts/
-          cp contracts/target/dev/rhizome_anonymizer_RhizomeVesuAnonymizer.compiled_contract_class.json artifacts/
+          for c in RhizomeVesuAnonymizer MockVesuVault; do
+            cp "contracts/target/dev/rhizome_anonymizer_${c}.contract_class.json" artifacts/
+            cp "contracts/target/dev/rhizome_anonymizer_${c}.compiled_contract_class.json" artifacts/
+          done
           cp contracts/target/dev/rhizome_anonymizer.starknet_artifacts.json artifacts/
           git add artifacts
           if git diff --cached --quiet -- artifacts; then
@@ -84,5 +91,5 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "ci: publish compiled anonymizer class [skip ci]"
+          git commit -m "ci: publish compiled classes [skip ci]"
           git push
