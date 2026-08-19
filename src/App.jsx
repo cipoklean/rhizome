@@ -13,6 +13,21 @@ import {
   getFeeAmount,
 } from "./lib/pool.mjs";
 import { formatUnits, parseUnits } from "./lib/units.mjs";
+import {
+  NOTE_MATURITY_BLOCKS,
+  delayFrontier,
+  formatDelay,
+  measureBlockTime,
+  poolTransactionBlocks,
+  recommendDelay,
+} from "./lib/timing.mjs";
+
+/**
+ * Timing cover is judged on recent traffic only. This pool put roughly 80% of
+ * its lifetime transactions into 2.5% of its life, and averaging that burst in
+ * would promise company that will not be there today.
+ */
+const TIMING_SAMPLE_BLOCKS = 500000;
 
 const VERDICTS = {
   "already-covered": {
@@ -49,10 +64,11 @@ export default function App() {
       try {
         const net = cfg[network];
         const provider = await connect(net.rpc);
-        const [block, fee, feeHistory] = await Promise.all([
+        const [block, fee, feeHistory, secondsPerBlock] = await Promise.all([
           provider.getBlockNumber(),
           getFeeAmount(provider, net.strk20Pool),
           fetchFeeHistory(provider, net.strk20Pool),
+          measureBlockTime(provider).catch(() => null),
         ]);
         const token = net.tokens?.STRK ?? cfg.mainnet.tokens.STRK;
         const [deposits, withdrawals] = await Promise.all([
@@ -64,7 +80,8 @@ export default function App() {
         // The pool settles its own fee with an extra withdraw leg back to a fee
         // router, so most public withdrawals are fee reimbursement rather than
         // anybody's position. Counting them as cover would invent a cohort of
-        // thousands at exactly the fee amount.
+        // thousands at exactly the fee amount. They are still useful as a census
+        // of pool transactions, which is what timing cover is measured against.
         const { positions: exits, feeLegs } = classifyWithdrawals(withdrawals, feeHistory);
 
         setState({
@@ -72,8 +89,10 @@ export default function App() {
           block,
           fee,
           feeHistory,
+          secondsPerBlock,
           deposits,
           exits,
+          txBlocks: poolTransactionBlocks(feeLegs),
           feeLegs: feeLegs.length,
           withdrawals: withdrawals.length,
           entryHist: amountHistogram(deposits),
@@ -107,6 +126,22 @@ export default function App() {
       popular: popularAmounts(state.entryHist, 8).map((p) =>
         roundTripCohort(state.entryHist, state.exitHist, p.amount),
       ),
+    };
+  }, [state]);
+
+  const timing = useMemo(() => {
+    if (state.status !== "ready" || !state.txBlocks?.length) return null;
+    const sampleFrom = Math.max(0, state.block - TIMING_SAMPLE_BLOCKS);
+    const rows = delayFrontier(state.txBlocks, {
+      sampleFrom,
+      secondsPerBlock: state.secondsPerBlock,
+    });
+    return {
+      rows,
+      rec: recommendDelay(rows),
+      recent: state.txBlocks.filter((b) => b >= sampleFrom).length,
+      total: state.txBlocks.length,
+      floor: rows.find((r) => r.window === NOTE_MATURITY_BLOCKS) ?? null,
     };
   }, [state]);
 
@@ -372,6 +407,14 @@ export default function App() {
           {FEE_MODELS[feeModel].note}
         </p>
 
+        {network !== "mainnet" && (
+          <p className="status" style={{ marginTop: 10, color: "var(--orange)" }}>
+            Sepolia is the right place to dry-run execution and the wrong place to measure cover: a
+            different fee, a fraction of the traffic, and testnet amounts that nobody chose for
+            privacy. Read the frontier on mainnet, then rehearse the schedule here.
+          </p>
+        )}
+
         {!analysis && state.status === "ready" && (
           <p className="status">no deposits for this token yet.</p>
         )}
@@ -466,6 +509,74 @@ export default function App() {
         )}
       </section>
 
+      {timing && (
+        <section className="band">
+          <p className="eyebrow">
+            <b>◢</b> TIMING
+          </p>
+          <h2>The cover that costs nothing.</h2>
+          <p className="lede">
+            Amount cover is bought with fees. Timing cover is bought by waiting, and waiting is free
+            — but only if somebody else transacts while you wait. Shielding in a separate transaction
+            is what stops an observer tying your deposit to the venue action it funds, and that
+            separation is worthless if you are the only pool transaction in the window.{" "}
+            {timing.total.toLocaleString()} pool transactions in the pool&apos;s history,{" "}
+            {timing.recent.toLocaleString()} in the last {TIMING_SAMPLE_BLOCKS.toLocaleString()}{" "}
+            blocks ({formatDelay(TIMING_SAMPLE_BLOCKS, state.secondsPerBlock)}). Judged on the recent
+            window only — an old burst is not cover for a transaction sent today.
+          </p>
+
+          <div className={`verdict ${timing.rec.verdict}`}>
+            <h3>
+              {timing.rec.verdict === "delay-earns-it"
+                ? `Wait ${timing.rec.window.toLocaleString()} blocks between the two legs.`
+                : "This pool is too quiet for timing cover."}
+            </h3>
+            <p>
+              {timing.rec.verdict === "delay-earns-it"
+                ? `That is ${formatDelay(timing.rec.window, state.secondsPerBlock)}, and it costs nothing but patience. In a window that wide the median pool transaction has ${timing.rec.medianCohort} others for company, and is alone only ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time.`
+                : `Even at ${timing.rec.window.toLocaleString()} blocks (${formatDelay(timing.rec.window, state.secondsPerBlock)}) a transaction is alone ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time. Wait as long as you can bear, and know the delay is doing less work here than the amounts are.`}
+              {timing.floor && (
+                <>
+                  {" "}
+                  At the {NOTE_MATURITY_BLOCKS}-block note maturity floor you are alone{" "}
+                  <b>{(timing.floor.aloneShare * 100).toFixed(0)}%</b> of the time — so shielding
+                  separately and then invoking immediately spends an extra fee for almost nothing.
+                </>
+              )}
+            </p>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Delay</th>
+                  <th>Wait</th>
+                  <th>Other pool tx (median)</th>
+                  <th>Alone</th>
+                </tr>
+              </thead>
+              <tbody>
+                {timing.rows.map((r) => (
+                  <tr key={r.window} className={r.window === timing.rec.window ? "chosen" : ""}>
+                    <td>
+                      {r.window.toLocaleString()} blocks
+                      {r.window === NOTE_MATURITY_BLOCKS && (
+                        <span className="pill">maturity floor</span>
+                      )}
+                    </td>
+                    <td>{formatDelay(r.window, state.secondsPerBlock)}</td>
+                    <td>{r.medianCohort}</td>
+                    <td>{(r.aloneShare * 100).toFixed(0)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       <ExecutePanel
         net={cfg[network]}
         network={network}
@@ -473,6 +584,8 @@ export default function App() {
         schedule={analysis?.rec?.schedule ?? []}
         fee={state.fee ?? null}
         feeModel={feeModel}
+        delay={timing?.rec ?? null}
+        secondsPerBlock={state.secondsPerBlock ?? null}
       />
 
       <footer>

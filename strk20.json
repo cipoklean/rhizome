@@ -1,6 +1,15 @@
 {
   "transactions": [],
-  "contracts": [],
+  "contracts": [
+    {
+      "name": "RhizomeVesuAnonymizer",
+      "network": "sepolia",
+      "address": "0x552d747e90eb70e52e9c5f9d9150b97e46ac9b25989a36e7eee96a2e45c5e20",
+      "class_hash": "0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a",
+      "source": "contracts/src/lib.cairo",
+      "note": "privacy_invoke helper for Vesu vault deposit and withdraw. Adapted from StarkWare's reference vesu_lending_anonymizer. Unaudited. `npm run verify:facts` checks this class hash against the class committed in artifacts/, so the reviewed bytecode and the deployed bytecode are provably the same."
+    }
+  ],
   "demo_video": "",
   "demo_url": ""
 }

@@ -63,17 +63,23 @@ function u256Felts(value) {
 /**
  * One tranche into the Vesu vault, as STRK20 actions.
  *
+ * The documented shape for private DeFi is exactly two actions in one pool
+ * transaction — an open note for the output, then the invoke:
+ * https://strk20-by-example.org/starknet-wallet-api/private-defi
+ *
  * The open note receives the vToken shares the helper produces; its amount is
  * only known once the vault has run, which is why it is created with "OPEN" and
- * filled in the same transaction.
+ * filled in the same transaction. Open-note amounts are public by design.
  *
  * Helper calldata follows the fixed convention: the last felt is always the id
  * of the open note to fill. Our `privacy_invoke(operation, in_token, out_token,
  * assets: u256, note_id)` matches — with u256 occupying two felts.
  *
- * `shape` exists because the docs' worked example passes only [transfer, invoke]
- * while the pool's phase model also allows an explicit withdraw leg to the
- * helper. Which one the pool accepts is settled by dry-running, not by guessing.
+ * `shape` stays configurable despite the documentation, because the pool's own
+ * balance accounting requires the input tokens to reach the helper somehow, and
+ * the documented example does not show that leg. Which shape the pool accepts is
+ * settled by dry-running against a real wallet, not by reading either source
+ * harder.
  */
 export function buildTrancheActions({
   anonymizer,
@@ -105,7 +111,15 @@ export function buildTrancheActions({
   return [openNote, invoke];
 }
 
-/** A plain deposit — shield public tokens into the pool. */
+/**
+ * A plain deposit — shield public tokens into the pool.
+ *
+ * This is the leg whose amount the cohort analysis actually chose: it emits the
+ * public `Deposit` event that an observer sees. It costs one pool fee of its own,
+ * and the wallet prompts **twice** — the ERC-20 `approve` has to be on-chain
+ * before the private deposit can be proven, so a single "shield" is two wallet
+ * signatures. Name both in the UI or users read the second as a bug.
+ */
 export function buildShieldActions({ token, amount }) {
   return [{ type: "deposit", token, amount: toHex(amount) }];
 }
@@ -120,4 +134,29 @@ export async function dryRun(account, actions) {
 
 export async function execute(account, actions) {
   return account.strk20InvokeTransaction(actions);
+}
+
+/**
+ * Wait for a transaction, but never forever.
+ *
+ * Private transactions are relayed, so they can take a while to become visible
+ * to whichever RPC this dapp happens to be on. An unbounded await strands the UI
+ * in a pending state with no feedback, so time out and report "submitted" —
+ * which is true, and checkable on an explorer.
+ */
+export async function confirm(provider, transactionHash, { timeoutMs = 90000 } = {}) {
+  let timer;
+  try {
+    const receipt = await Promise.race([
+      provider.waitForTransaction(transactionHash),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), timeoutMs);
+      }),
+    ]);
+    return receipt === "timeout" ? { confirmed: false, timedOut: true } : { confirmed: true, receipt };
+  } catch (e) {
+    return { confirmed: false, error: e.message };
+  } finally {
+    clearTimeout(timer);
+  }
 }

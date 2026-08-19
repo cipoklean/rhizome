@@ -54,7 +54,8 @@ Three consequences the earlier version of this README got wrong:
 
 ## What Rhizome does
 
-Rhizome treats unlinkability as something with a price, and computes it.
+Rhizome treats unlinkability as something with a price, and computes it — in STRK on one axis and
+in patience on the other.
 
 1. **Reads the live fee and its history** from the pool rather than assuming it.
 2. **Reads both public legs** — the pool's own `Deposit` *and* `Withdrawal` events — to find
@@ -64,13 +65,51 @@ Rhizome treats unlinkability as something with a price, and computes it.
 4. **Computes the frontier**: for a given position size, what tranche count buys meaningful
    unlinkability, and what it costs in fees — priced per pool transaction, with the full round
    trip shown alongside. Sometimes the honest answer is "one tranche".
-5. **Executes the chosen schedule** through its own anonymizer contract, each tranche landing in
-   its own note.
+5. **Prices the delay too**, from the pool's own traffic — because the extra fee you pay to
+   separate a shield from the venue action it funds buys nothing if nothing else happens in
+   between.
+6. **Executes the chosen schedule** through its own anonymizer contract: shield the chosen amount,
+   wait out the measured delay, then move it into the vault, each tranche landing in its own note.
 
 Externally: several indistinguishable deposits with no shared fingerprint. Internally: one
 position, one dashboard.
 
 Existing privacy-preflight tools tell a user they leaked. Rhizome prices the fix and executes it.
+
+## The cover that costs nothing, and mostly isn't there
+
+Splitting a position is expensive. Waiting is free — so the free axis should be spent first. Except
+you cannot spend what the pool does not have.
+
+Every priced pool transaction emits exactly one fee-reimbursement withdrawal, which makes those
+legs a census of pool transactions. Measured over the most recent 500,000 blocks, at the measured
+block time of **1.73s** (not the 30s the ecosystem's older docs imply — that changes every
+"how long must I wait" answer by an order of magnitude):
+
+| delay | wait | other pool tx (median) | alone |
+| ---: | ---: | ---: | ---: |
+| 10 blocks | 17s | 0 | **98%** |
+| 50 | 87s | 0 | 52% |
+| 200 | 6 min | 2 | 25% |
+| 1,000 | 29 min | 4 | 13% |
+| 5,000 | 2.4 h | 11 | 2% |
+| 20,000 | 9.6 h | 33 | 0% |
+
+Freshly shielded notes need about **10 blocks** to mature, so ten blocks is the floor on any
+two-transaction schedule. At that floor, **98% of pool transactions have no company at all**. An
+observer looking for "the deposit that funded this vault action" has exactly one candidate and does
+not need to look at amounts.
+
+That is the sharpest thing in this repo, and it cuts against its own product: the second pool
+transaction per leg — 6 STRK, the thing the fee model exists to charge for — is **wasted** unless
+you also wait. Rhizome asks for 5,000 blocks, about two and a half hours, which is where the median
+transaction picks up 11 others and is alone only 2% of the time. That costs nothing, and no fee
+schedule substitutes for it.
+
+The pool is also far quieter than its lifetime totals suggest: 14,565 pool transactions in its
+history, but **245 in the last ten days**, because roughly 80% of all activity landed in a single
+burst around block 11.0M. Rhizome scores timing on the recent window only. An old burst is not
+cover for a transaction sent today.
 
 ## What the public data actually says
 
@@ -147,14 +186,21 @@ can create it.
 
 ## Status
 
-Early. The analysis layer is complete and measured against mainnet; the anonymizer is deployed and
-verified on Sepolia; mainnet execution is not wired yet.
+Early. The analysis layer is complete and measured against mainnet. Execution is wired as a
+two-stage runner per leg — shield, wait out the measured delay, then invoke the vault — gated on a
+dry run of each action shape, and it has not yet been run against a wallet on mainnet.
 
 | | |
 | --- | --- |
 | Sepolia anonymizer | `0x552d747e90eb70e52e9c5f9d9150b97e46ac9b25989a36e7eee96a2e45c5e20` |
 | Sepolia class hash | `0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a` |
 | Mainnet anonymizer | not deployed |
+
+The two-action shape for the vault leg (`transfer` with `amount: "OPEN"`, then `invoke`) is the
+documented one, but the pool also has to get the input tokens to the helper, and the documented
+example does not show that leg. Both shapes are selectable in the UI and neither can submit until
+its dry run passes — `strk20PrepareInvoke` proves without spending a fee, so the wallet settles the
+question rather than a guess.
 
 `npm run verify:facts` checks the deployed class hash against the class committed in
 `artifacts/`, so the reviewed bytecode and the deployed bytecode are provably the same.
