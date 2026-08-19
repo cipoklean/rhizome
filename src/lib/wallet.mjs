@@ -1,0 +1,123 @@
+// Wallet layer — the Starknet Wallet API route.
+//
+// The dapp describes actions; the wallet holds the viewing key, discovers notes,
+// generates the proof and submits. Rhizome never sees a key.
+//
+// Verified against starknet@10.4.0 and get-starknet 6.0.3:
+//   createStore                      @starknet-io/get-starknet-discovery (root export)
+//   WalletAccountV6.connect          starknet
+//   walletV6.supportedWalletApi      capability detection
+//   strk20Balances / strk20PrepareInvoke / strk20InvokeTransaction
+
+import { WalletAccountV6, walletV6 } from "starknet";
+
+/** LendingOperation variants, in Cairo declaration order. */
+export const OPERATION = { Deposit: "0x0", Withdraw: "0x1" };
+
+/** Wallets currently injected into the page. */
+export async function listWallets() {
+  const { createStore } = await import("@starknet-io/get-starknet-discovery");
+  return createStore().getWallets();
+}
+
+/**
+ * Is this wallet STRK20-capable?
+ *
+ * Detect with a version query, never a data call. Probing `strk20Balances([])`
+ * would make the wallet prompt the user to disclose balances the app does not
+ * need. The wallet-standard feature version (`1.0.0`) says nothing about STRK20
+ * support — only the Wallet API version does.
+ */
+export async function checkStrk20Support(wallet) {
+  try {
+    const versions = await walletV6.supportedWalletApi(wallet);
+    const list = Array.isArray(versions) ? versions : [versions];
+    const supported = list.some((v) => {
+      const [major, minor] = String(v).split(".").map(Number);
+      return major === 0 ? minor >= 10 : major > 0;
+    });
+    return { supported, versions: list };
+  } catch (e) {
+    return { supported: false, versions: [], error: e.message };
+  }
+}
+
+export async function connectWallet(wallet, nodeUrl) {
+  return WalletAccountV6.connect({ nodeUrl }, wallet);
+}
+
+/** Shielded balances, read through the wallet — no viewing key in the app. */
+export async function shieldedBalances(account, tokens) {
+  return account.strk20Balances(tokens);
+}
+
+const toHex = (v) => (typeof v === "bigint" ? "0x" + v.toString(16) : v);
+
+/** u256 splits into (low, high) felts. */
+function u256Felts(value) {
+  const v = BigInt(value);
+  const MASK = (1n << 128n) - 1n;
+  return [toHex(v & MASK), toHex(v >> 128n)];
+}
+
+/**
+ * One tranche into the Vesu vault, as STRK20 actions.
+ *
+ * The open note receives the vToken shares the helper produces; its amount is
+ * only known once the vault has run, which is why it is created with "OPEN" and
+ * filled in the same transaction.
+ *
+ * Helper calldata follows the fixed convention: the last felt is always the id
+ * of the open note to fill. Our `privacy_invoke(operation, in_token, out_token,
+ * assets: u256, note_id)` matches — with u256 occupying two felts.
+ *
+ * `shape` exists because the docs' worked example passes only [transfer, invoke]
+ * while the pool's phase model also allows an explicit withdraw leg to the
+ * helper. Which one the pool accepts is settled by dry-running, not by guessing.
+ */
+export function buildTrancheActions({
+  anonymizer,
+  inToken,
+  outToken,
+  amount,
+  recipient,
+  operation = OPERATION.Deposit,
+  shape = "implicit",
+}) {
+  const openNote = { type: "transfer", token: outToken, amount: "OPEN", recipient };
+  const invoke = {
+    type: "invoke",
+    contract: anonymizer,
+    calldata: [
+      operation,
+      inToken,
+      outToken,
+      ...u256Felts(amount),
+      "${openNoteIds[0]}",
+    ],
+  };
+
+  if (shape === "explicit-withdraw") {
+    // Phase order matters and may never go backwards:
+    // create note (5) -> withdraw (6) -> invoke (7).
+    return [openNote, { type: "withdraw", token: inToken, amount: toHex(amount), recipient: anonymizer }, invoke];
+  }
+  return [openNote, invoke];
+}
+
+/** A plain deposit — shield public tokens into the pool. */
+export function buildShieldActions({ token, amount }) {
+  return [{ type: "deposit", token, amount: toHex(amount) }];
+}
+
+/**
+ * Build and prove without submitting. The cheapest way to find a calldata-shape
+ * mistake, and free — no fee, no transaction.
+ */
+export async function dryRun(account, actions) {
+  return account.strk20PrepareInvoke(actions, true);
+}
+
+export async function execute(account, actions) {
+  return account.strk20InvokeTransaction(actions);
+}

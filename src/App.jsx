@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import cfg from "../config/addresses.json";
+import ExecutePanel from "./ExecutePanel.jsx";
 import FrontierChart from "./FrontierChart.jsx";
 import { amountHistogram, popularAmounts } from "./lib/cohorts.mjs";
 import { computeFrontier, recommend } from "./lib/frontier.mjs";
@@ -342,6 +343,13 @@ export default function App() {
           </>
         )}
       </section>
+
+      <ExecutePanel
+        net={cfg[network]}
+        network={network}
+        token={cfg[network].tokens?.STRK ?? cfg.mainnet.tokens.STRK}
+        schedule={analysis?.rec?.schedule ?? []}
+      />
 
       <footer>
         <div className="meta">
