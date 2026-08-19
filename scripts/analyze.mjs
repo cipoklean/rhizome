@@ -20,6 +20,23 @@ import {
   getFeeCollector,
 } from "../src/lib/pool.mjs";
 import { formatUnits, parseUnits } from "../src/lib/units.mjs";
+import {
+  NOTE_MATURITY_BLOCKS,
+  delayFrontier,
+  formatDelay,
+  measureBlockTime,
+  poolTransactionBlocks,
+  recommendDelay,
+} from "../src/lib/timing.mjs";
+
+/**
+ * How far back to look when judging timing cover.
+ *
+ * Recent traffic only, on purpose: this pool put roughly 80% of its lifetime
+ * transactions into 2.5% of its life, and averaging that burst in would promise
+ * company that will not be there.
+ */
+const TIMING_SAMPLE_BLOCKS = 500000;
 
 const cfg = JSON.parse(readFileSync(new URL("../config/addresses.json", import.meta.url)));
 
@@ -114,6 +131,57 @@ for (const { amount } of popularAmounts(entryHist, 12)) {
   const flag = s.exitKnown && s.exitCohort === 0 ? "   <- never withdrawn" : "";
   console.log(
     `  ${fmt(amount).padStart(12)}   ${String(s.entryCohort).padStart(6)}  ${String(s.exitCohort ?? "?").padStart(6)}   ${String(s.cohort).padStart(6)}${flag}`,
+  );
+}
+
+// --- timing: the axis that costs patience rather than STRK -----------------
+
+const latest = await provider.getBlockNumber();
+const secondsPerBlock = await measureBlockTime(provider);
+const txBlocks = poolTransactionBlocks(feeLegs);
+const sampleFrom = Math.max(0, latest - TIMING_SAMPLE_BLOCKS);
+const recentCount = txBlocks.filter((b) => b >= sampleFrom).length;
+
+console.log(`\n=== timing ===`);
+console.log(`block time ${secondsPerBlock?.toFixed(2) ?? "?"}s, measured`);
+console.log(
+  `${txBlocks.length} pool transactions in the pool's history; ${recentCount} in the last ` +
+    `${TIMING_SAMPLE_BLOCKS.toLocaleString()} blocks (${formatDelay(TIMING_SAMPLE_BLOCKS, secondsPerBlock)})`,
+);
+console.log(
+  "\nSeparating the shield from the venue action only helps if something else happened in\n" +
+    "between. Scored on recent traffic only — an old burst is not cover for a transaction sent\n" +
+    "today.\n",
+);
+
+const delayRows = delayFrontier(txBlocks, { sampleFrom, secondsPerBlock });
+console.log("   delay             wait   other pool tx (median)   alone");
+for (const r of delayRows) {
+  const floor = r.window === NOTE_MATURITY_BLOCKS ? "   <- note maturity floor" : "";
+  console.log(
+    `  ${String(r.window).padStart(6)} blocks   ${formatDelay(r.window, secondsPerBlock).padStart(8)}   ` +
+      `${String(r.medianCohort).padStart(21)}   ${(r.aloneShare * 100).toFixed(0).padStart(3)}%${floor}`,
+  );
+}
+
+const delay = recommendDelay(delayRows);
+if (delay.verdict === "delay-earns-it") {
+  console.log(
+    `\nwait ${delay.window} blocks (${formatDelay(delay.window, secondsPerBlock)}) between shielding and the venue action —\n` +
+      `median ${delay.medianCohort} other pool transactions in that window, alone only ${(delay.aloneShare * 100).toFixed(0)}% of the time. Costs nothing but time.`,
+  );
+} else {
+  console.log(
+    `\nthis pool is too quiet for timing cover: even at ${delay.window} blocks ` +
+      `(${formatDelay(delay.window, secondsPerBlock)}) a transaction is\nalone ${(delay.aloneShare * 100).toFixed(0)}% of the time. ` +
+      "Wait as long as you can bear, and know that the delay\nis doing less work than the amounts are.",
+  );
+}
+const floorRow = delayRows.find((r) => r.window === NOTE_MATURITY_BLOCKS);
+if (floorRow) {
+  console.log(
+    `\nAt the maturity floor of ${NOTE_MATURITY_BLOCKS} blocks you are alone ${(floorRow.aloneShare * 100).toFixed(0)}% of the time. ` +
+      "Shielding in a\nseparate transaction and then invoking immediately spends an extra fee for almost nothing.",
   );
 }
 
