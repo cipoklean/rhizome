@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   OPERATION,
+  buildPrepareInvokeRequest,
   buildTrancheActions,
   ensureWalletChain,
   resolveChainId,
@@ -118,11 +119,33 @@ test("the explicit vault shape funds the helper before invoking it", () => {
     recipient: "0x333",
     shape: "explicit-withdraw",
   });
-  assert.deepEqual(actions.map((a) => a.type), ["transfer", "withdraw", "invoke"]);
-  assert.deepEqual(actions[1], {
-    type: "withdraw",
-    token: "0x111",
-    amount: "0x1",
-    recipient: "0xaaa",
+  assert.deepEqual(actions, [
+    { type: "transfer", token: "0x222", amount: "OPEN", recipient: "0x333" },
+    {
+      type: "withdraw",
+      token: "0x111",
+      amount: "0x1",
+      recipient: "0xaaa",
+    },
+    {
+      type: "invoke",
+      contract: "0xaaa",
+      calldata: ["0x0", "0x111", "0x222", "0x1", "0x0", "${openNoteIds[0]}"],
+    },
+  ]);
+});
+
+test("the visible dry-run diagnostic matches starknet.js request serialization", () => {
+  const actions = buildTrancheActions({
+    anonymizer: "0xaaa",
+    inToken: "0x111",
+    outToken: "0x222",
+    amount: 1n,
+    recipient: "0x333",
+    shape: "explicit-withdraw",
+  });
+  assert.deepEqual(buildPrepareInvokeRequest(actions), {
+    type: "wallet_strk20PrepareInvoke",
+    params: { actions, simulate: true },
   });
 });

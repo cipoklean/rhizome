@@ -11,6 +11,7 @@ import { NOTE_MATURITY_BLOCKS, formatDelay } from "./lib/timing.mjs";
 import { formatUnits, parseUnits } from "./lib/units.mjs";
 import {
   OPERATION,
+  buildPrepareInvokeRequest,
   buildShieldActions,
   buildTrancheActions,
   checkStrk20Support,
@@ -61,6 +62,7 @@ export default function ExecutePanel({
   const [shape, setShape] = useState("implicit");
   const [directVaultAmount, setDirectVaultAmount] = useState("1");
   const [directVaultPassed, setDirectVaultPassed] = useState(null);
+  const [directVaultAttempt, setDirectVaultAttempt] = useState(null);
   const [busy, setBusy] = useState(null);
   const [log, setLog] = useState([]);
   const [shieldDryRun, setShieldDryRun] = useState(false);
@@ -222,7 +224,7 @@ export default function ExecutePanel({
 
   const shieldActionsFor = (leg) => buildShieldActions({ token, amount: leg.amount });
 
-  const investActionsFor = (leg) =>
+  const investActionsFor = (leg, selectedShape = shape) =>
     buildTrancheActions({
       anonymizer,
       inToken: token,
@@ -230,7 +232,7 @@ export default function ExecutePanel({
       amount: leg.amount,
       recipient: account?.address ?? "0x0",
       operation: OPERATION.Deposit,
-      shape,
+      shape: selectedShape,
     });
 
   const patch = (i, fields) => setLegs((l) => ({ ...l, [i]: { ...(l[i] ?? {}), ...fields } }));
@@ -271,23 +273,29 @@ export default function ExecutePanel({
    * conservation during proving, so the account needs the requested amount plus
    * enough shielded STRK for the fee.
    */
-  async function dryRunExistingVault() {
+  async function dryRunExistingVault(selectedShape) {
     if (!account || !deployed) return;
-    setBusy("dryrun-existing-vault");
+    setShape(selectedShape);
+    setBusy(`dryrun-existing-vault-${selectedShape}`);
     setDirectVaultPassed(null);
     try {
       const amount = parseUnits(directVaultAmount, 18);
       if (amount <= 0n) throw new Error("enter a vault amount above zero");
+      const actions = investActionsFor({ amount }, selectedShape);
+      setDirectVaultAttempt({
+        shape: selectedShape,
+        request: buildPrepareInvokeRequest(actions),
+      });
       await requireSelectedChain();
-      await dryRun(account, investActionsFor({ amount }));
-      setDirectVaultPassed(shape);
+      await dryRun(account, actions);
+      setDirectVaultPassed(selectedShape);
       say(
-        `Direct vault dry run passed (${shape}, ${strk(amount)} STRK from existing shielded funds). No transaction sent.`,
+        `Direct vault dry run passed (${selectedShape}, ${strk(amount)} STRK from existing shielded funds). No transaction sent.`,
         "ok",
       );
     } catch (e) {
       setDirectVaultPassed(null);
-      say(`Direct vault dry run rejected (${shape}): ${e.message}`, "err");
+      say(`Direct vault dry run rejected (${selectedShape}): ${e.message}`, "err");
     } finally {
       setBusy(null);
     }
@@ -546,7 +554,7 @@ export default function ExecutePanel({
         ))}
         {deployed && (
           <label className="field">
-            Vault action shape
+            Staged execution shape
             <select
               value={shape}
               onChange={(e) => {
@@ -620,9 +628,10 @@ export default function ExecutePanel({
         <div className="verdict" style={{ marginTop: 22 }}>
           <h3>Test stage 2 with funds already shielded.</h3>
           <p>
-            This proves the selected vault action shape without submitting stage 1 or spending a
-            pool fee. It uses your existing shielded STRK and sends no transaction. Start with 1
-            STRK; proving also needs enough shielded STRK to account for the 2 STRK Sepolia pool fee.
+            Choose either exact action shape below. Each button constructs and submits the shape
+            printed on that button, updates the staged-execution selector, spends no pool fee and
+            sends no transaction. Start with 1 STRK; proving also needs enough shielded STRK to
+            account for the 2 STRK Sepolia pool fee.
           </p>
           <div className="controls" style={{ marginTop: 18 }}>
             <label className="field">
@@ -634,24 +643,49 @@ export default function ExecutePanel({
                 onChange={(e) => {
                   setDirectVaultAmount(e.target.value);
                   setDirectVaultPassed(null);
+                  setDirectVaultAttempt(null);
                 }}
                 aria-label="Direct vault dry-run amount in STRK"
               />
             </label>
-            <button
-              type="button"
-              className="chip"
-              onClick={dryRunExistingVault}
-              disabled={busy !== null}
-              aria-pressed={directVaultPassed === shape}
-            >
-              {busy === "dryrun-existing-vault"
-                ? "proving…"
-                : directVaultPassed === shape
-                  ? `vault dry run passed (${shape}) ✓`
-                  : `Dry run vault (${shape}, free) →`}
-            </button>
+            {["implicit", "explicit-withdraw"].map((testShape) => (
+              <button
+                key={testShape}
+                type="button"
+                className="chip"
+                onClick={() => dryRunExistingVault(testShape)}
+                disabled={busy !== null}
+                aria-pressed={directVaultPassed === testShape}
+              >
+                {busy === `dryrun-existing-vault-${testShape}`
+                  ? `proving ${testShape}…`
+                  : directVaultPassed === testShape
+                    ? `${testShape} passed ✓`
+                    : `Test ${testShape} (free) →`}
+              </button>
+            ))}
           </div>
+          {directVaultAttempt && (
+            <details open style={{ marginTop: 18 }}>
+              <summary className="status" style={{ cursor: "pointer" }}>
+                Latest click submitted: {directVaultAttempt.shape}
+              </summary>
+              <pre
+                className="mono"
+                style={{
+                  marginTop: 12,
+                  padding: 14,
+                  border: "1px solid var(--line)",
+                  background: "#0a0a0a",
+                  fontSize: 12,
+                  overflowX: "auto",
+                  color: "var(--dim)",
+                }}
+              >
+                {JSON.stringify(directVaultAttempt.request, null, 2)}
+              </pre>
+            </details>
+          )}
         </div>
       )}
 

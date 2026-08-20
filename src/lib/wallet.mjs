@@ -196,6 +196,14 @@ export function buildShieldActions({ token, amount }) {
   return [{ type: "deposit", token, amount: toHex(amount) }];
 }
 
+/** Exact Wallet API envelope that starknet.js sends for a free STRK20 dry run. */
+export function buildPrepareInvokeRequest(actions, simulate = true) {
+  return {
+    type: "wallet_strk20PrepareInvoke",
+    params: { actions, simulate },
+  };
+}
+
 /**
  * Build and prove without submitting. The cheapest way to find a calldata-shape
  * mistake, and free — no fee, no transaction.
