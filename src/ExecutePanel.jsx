@@ -1,4 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  acceptedReceiptBlock,
+  executionProgressKey,
+  readExecutionProgress,
+  writeExecutionProgress,
+} from "./lib/execution.mjs";
 import { connect } from "./lib/pool.mjs";
 import { FEE_MODELS } from "./lib/frontier.mjs";
 import { NOTE_MATURITY_BLOCKS, formatDelay } from "./lib/timing.mjs";
@@ -54,16 +60,53 @@ export default function ExecutePanel({
   const [log, setLog] = useState([]);
   const [shieldDryRun, setShieldDryRun] = useState(false);
   const [block, setBlock] = useState(null);
+  const [delayMode, setDelayMode] = useState(network === "sepolia" ? "rehearsal" : "measured");
   // Per-leg progress: { [index]: { stage, shieldTx, shieldedAt, investDryRun, investTx } }
   const [legs, setLegs] = useState({});
+  const [hydratedProgressKey, setHydratedProgressKey] = useState(null);
 
   const anonymizer = net.anonymizer;
   const vToken = net.vesu?.vTokens?.STRK ?? null;
   const txPerLeg = FEE_MODELS[feeModel]?.txPerLeg ?? 1;
-  const delayBlocks = Math.max(NOTE_MATURITY_BLOCKS, delay?.window ?? NOTE_MATURITY_BLOCKS);
+  const measuredDelayBlocks = Math.max(
+    NOTE_MATURITY_BLOCKS,
+    delay?.window ?? NOTE_MATURITY_BLOCKS,
+  );
+  // Mainnet never exposes the shortcut. On Sepolia it is a rehearsal of the
+  // action path, not a claim of timing cover.
+  const isRehearsal = network === "sepolia" && delayMode === "rehearsal";
+  const delayBlocks = isRehearsal ? NOTE_MATURITY_BLOCKS : measuredDelayBlocks;
+
+  const progressKey = useMemo(
+    () =>
+      executionProgressKey({
+        chainId: net.chainId,
+        account: account?.address,
+        anonymizer,
+        schedule,
+      }),
+    [net.chainId, account?.address, anonymizer, schedule],
+  );
 
   const say = (line, kind = "info") =>
     setLog((l) => [{ line, kind, at: new Date().toLocaleTimeString() }, ...l].slice(0, 14));
+
+  // A measured delay lasts hours. Restore only transaction hashes, landing
+  // blocks and durable stages — never notes, proofs, balances or viewing data.
+  useEffect(() => {
+    if (!progressKey) {
+      setHydratedProgressKey(null);
+      return;
+    }
+    const saved = readExecutionProgress(window.localStorage, progressKey, schedule.length);
+    setLegs(saved);
+    setHydratedProgressKey(progressKey);
+  }, [progressKey, schedule.length]);
+
+  useEffect(() => {
+    if (!progressKey || hydratedProgressKey !== progressKey) return;
+    writeExecutionProgress(window.localStorage, progressKey, legs, schedule.length);
+  }, [progressKey, hydratedProgressKey, legs, schedule.length]);
 
   // Readiness is measured in blocks, so the panel needs to know what block it is.
   useEffect(() => {
@@ -213,6 +256,18 @@ export default function ExecutePanel({
     }
   }
 
+  /** Record a shield only when a receipt proves the block it landed in. */
+  function acceptShieldReceipt(i, receipt) {
+    const at = acceptedReceiptBlock(receipt);
+    if (at === null) return false;
+    patch(i, { stage: "shielded", shieldedAt: at });
+    say(
+      `Leg ${i + 1} shielded at block ${at}. Vault action unlocks in ${delayBlocks} blocks (${formatDelay(delayBlocks, secondsPerBlock)}).`,
+      "ok",
+    );
+    return true;
+  }
+
   /** Stage 1: the public deposit leg — the amount the analysis chose. */
   async function shield(i) {
     if (!account || !shieldDryRun) return;
@@ -222,22 +277,46 @@ export default function ExecutePanel({
       await requireSelectedChain();
       say(`Leg ${i + 1}: shielding ${strk(schedule[i].amount)} STRK — expect two prompts (approve, then deposit).`);
       const { transaction_hash } = await execute(account, shieldActionsFor(schedule[i]));
-      patch(i, { shieldTx: transaction_hash });
+      patch(i, { stage: "shield-pending", shieldTx: transaction_hash });
       say(`Leg ${i + 1} shield submitted: ${transaction_hash}`, "ok");
 
       const provider = await connect(net.rpc);
       const result = await confirm(provider, transaction_hash);
-      const at = await provider.getBlockNumber();
-      patch(i, { stage: "shielded", shieldedAt: at });
-      say(
-        result.confirmed
-          ? `Leg ${i + 1} shielded at block ${at}. Vault action unlocks in ${delayBlocks} blocks (${formatDelay(delayBlocks, secondsPerBlock)}).`
-          : `Leg ${i + 1} shield still pending; treating block ${at} as the start of the wait.`,
-        result.confirmed ? "ok" : "info",
-      );
+      if (!result.confirmed || !acceptShieldReceipt(i, result.receipt)) {
+        say(
+          `Leg ${i + 1} shield is submitted but not yet in a block. The delay clock has not started; use Check receipt.`,
+          "info",
+        );
+      }
     } catch (e) {
       patch(i, { stage: "failed" });
       say(`Leg ${i + 1} shield failed: ${e.message}`, "err");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Recheck a submitted shield after RPC visibility or confirmation timed out. */
+  async function checkShield(i) {
+    const tx = legs[i]?.shieldTx;
+    if (!tx) return;
+    setBusy(`check-shield-${i}`);
+    try {
+      const provider = await connect(net.rpc);
+      const receipt = await provider.getTransactionReceipt(tx);
+      if (!acceptShieldReceipt(i, receipt)) {
+        say(`Leg ${i + 1} shield is still pending. No delay block recorded.`, "info");
+      }
+    } catch (e) {
+      // RPCs commonly report "transaction not found" while a relayed tx is
+      // propagating. That is pending, not failed; a receipt marked REVERTED is
+      // surfaced by acceptShieldReceipt instead.
+      if (/revert/i.test(e.message)) {
+        patch(i, { stage: "failed" });
+        say(`Leg ${i + 1} shield reverted: ${e.message}`, "err");
+      } else {
+        say(`Leg ${i + 1} receipt not visible yet: ${e.message}`, "info");
+      }
     } finally {
       setBusy(null);
     }
@@ -261,16 +340,53 @@ export default function ExecutePanel({
   }
 
   /** Stage 2: into the vault through the anonymizer. */
+  function acceptInvestReceipt(i, receipt) {
+    const at = acceptedReceiptBlock(receipt);
+    if (at === null) return false;
+    patch(i, { stage: "invested", investedAt: at });
+    say(`Leg ${i + 1} is in the vault at block ${at}.`, "ok");
+    return true;
+  }
+
   async function invest(i) {
     if (!account || !legs[i]?.investDryRun) return;
     setBusy(`invest-${i}`);
     try {
       await requireSelectedChain();
       const { transaction_hash } = await execute(account, investActionsFor(schedule[i]));
-      patch(i, { stage: "invested", investTx: transaction_hash });
+      patch(i, { stage: "invest-pending", investTx: transaction_hash });
       say(`Leg ${i + 1} vault action submitted: ${transaction_hash}`, "ok");
+
+      const provider = await connect(net.rpc);
+      const result = await confirm(provider, transaction_hash);
+      if (!result.confirmed || !acceptInvestReceipt(i, result.receipt)) {
+        say(`Leg ${i + 1} vault action is submitted but not yet in a block.`, "info");
+      }
     } catch (e) {
+      patch(i, { stage: "failed" });
       say(`Leg ${i + 1} vault action failed: ${e.message}`, "err");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function checkInvest(i) {
+    const tx = legs[i]?.investTx;
+    if (!tx) return;
+    setBusy(`check-invest-${i}`);
+    try {
+      const provider = await connect(net.rpc);
+      const receipt = await provider.getTransactionReceipt(tx);
+      if (!acceptInvestReceipt(i, receipt)) {
+        say(`Leg ${i + 1} vault receipt is still pending.`, "info");
+      }
+    } catch (e) {
+      if (/revert/i.test(e.message)) {
+        patch(i, { stage: "failed" });
+        say(`Leg ${i + 1} vault action reverted: ${e.message}`, "err");
+      } else {
+        say(`Leg ${i + 1} vault receipt not visible yet: ${e.message}`, "info");
+      }
     } finally {
       setBusy(null);
     }
@@ -290,8 +406,10 @@ export default function ExecutePanel({
   const legStatus = (i) => {
     const leg = legs[i] ?? {};
     if (leg.stage === "invested") return { label: "in the vault", done: true };
+    if (leg.stage === "invest-pending") return { label: "vault tx pending", done: false };
     if (leg.stage === "failed") return { label: "failed", done: false };
     if (!leg.shieldedAt) {
+      if (leg.shieldTx) return { label: "shield tx pending", done: false, pendingShield: true };
       return { label: leg.stage === "shielding" ? "shielding…" : "not shielded", done: false };
     }
     const left = blocksLeft(i);
@@ -329,14 +447,28 @@ export default function ExecutePanel({
       </p>
 
       {delay && (
-        <div className="facts" style={{ marginTop: 22 }}>
-          <span className={`tag ${delay.verdict === "delay-earns-it" ? "hot" : ""}`}>
-            wait {delayBlocks} blocks · {formatDelay(delayBlocks, secondsPerBlock)}
-          </span>
-          <span className="tag">median {delay.medianCohort} other pool tx in that window</span>
-          <span className="tag">alone {(delay.aloneShare * 100).toFixed(0)}% of the time</span>
-          {block !== null && <span className="tag">block {block.toLocaleString()}</span>}
-        </div>
+        <>
+          <div className="facts" style={{ marginTop: 22 }}>
+            <span className={`tag ${!isRehearsal && delay.verdict === "delay-earns-it" ? "hot" : ""}`}>
+              wait {delayBlocks} blocks · {formatDelay(delayBlocks, secondsPerBlock)}
+            </span>
+            {isRehearsal ? (
+              <span className="tag hot">Sepolia rehearsal · no timing-cover claim</span>
+            ) : (
+              <>
+                <span className="tag">median {delay.medianCohort} other pool tx in that window</span>
+                <span className="tag">alone {(delay.aloneShare * 100).toFixed(0)}% of the time</span>
+              </>
+            )}
+            {block !== null && <span className="tag">block {block.toLocaleString()}</span>}
+          </div>
+          {isRehearsal && (
+            <p className="status" style={{ marginTop: 12, color: "var(--orange)" }}>
+              Rehearsal mode waits only for note maturity so you can test the action path. It does
+              not buy timing privacy. Mainnet never exposes this shortcut.
+            </p>
+          )}
+        </>
       )}
 
       {!deployed && (
@@ -347,6 +479,17 @@ export default function ExecutePanel({
       )}
 
       <div className="controls">
+        {network === "sepolia" && (
+          <label className="field">
+            Delay mode
+            <select value={delayMode} onChange={(e) => setDelayMode(e.target.value)}>
+              <option value="rehearsal">rehearsal · {NOTE_MATURITY_BLOCKS} blocks</option>
+              <option value="measured">
+                measured cover · {measuredDelayBlocks.toLocaleString()} blocks
+              </option>
+            </select>
+          </label>
+        )}
         {!wallets && (
           <button type="button" className="chip" onClick={discover} disabled={busy === "discover"}>
             {busy === "discover" ? "detecting…" : "Detect wallets →"}
@@ -463,19 +606,36 @@ export default function ExecutePanel({
                         <button
                           type="button"
                           className="chip"
-                          onClick={() => shield(i)}
-                          disabled={!shieldDryRun || busy !== null || Boolean(state.shieldedAt)}
+                          onClick={() => (state.shieldTx && !state.shieldedAt ? checkShield(i) : shield(i))}
+                          disabled={
+                            busy !== null ||
+                            Boolean(state.shieldedAt) ||
+                            (!state.shieldTx && !shieldDryRun)
+                          }
                         >
                           {busy === `shield-${i}`
                             ? "submitting…"
-                            : state.shieldedAt
-                              ? `block ${state.shieldedAt}`
-                              : "shield"}
+                            : busy === `check-shield-${i}`
+                              ? "checking…"
+                              : state.shieldedAt
+                                ? `block ${state.shieldedAt}`
+                                : state.shieldTx
+                                  ? "check receipt"
+                                  : "shield"}
                         </button>
                       </td>
                       <td>
                         {!state.shieldedAt ? (
                           <span style={{ color: "var(--ghost)" }}>—</span>
+                        ) : state.stage === "invest-pending" ? (
+                          <button
+                            type="button"
+                            className="chip"
+                            onClick={() => checkInvest(i)}
+                            disabled={busy !== null}
+                          >
+                            {busy === `check-invest-${i}` ? "checking…" : "check receipt"}
+                          </button>
                         ) : !status.ready ? (
                           <span style={{ color: "var(--faint)" }}>maturing</span>
                         ) : !state.investDryRun ? (
