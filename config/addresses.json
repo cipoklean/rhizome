@@ -71,11 +71,11 @@
     "anonymizerClassHash": "0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a",
     "vesu": {
       "kind": "mock",
-      "note": "MockVesuVault over real Sepolia STRK, 1:1 shares. A test double for rehearsing the vault leg — Vesu has no Sepolia deployment. Not an ERC-4626: no asset() or convert_to_assets().",
+      "note": "MockVesuVault over real Sepolia STRK, with wallet-discoverable ERC-20 metadata and 1:1 shares. A minimal test double for rehearsing the vault leg — Vesu has no Sepolia deployment; not a production ERC-4626 implementation.",
       "vTokens": {
-        "STRK": "0x6350ad512f7e4a39ed1d752ff8c33ebe15f7514800c5e38c28aca16a803421f"
+        "STRK": "0x72bc62f7908ccd0af345570a07f22e21d0276218c42e21b2b8b878d8b20c872"
       },
-      "classHash": "0x336552b337228ef1d53783358bfdd17bd84d7a9181048c33f97584a78d60065"
+      "classHash": "0x5575e90950a0ae31b629459a6a0977cc693505d264868d9d507143c803c3bb6"
     }
   }
 }

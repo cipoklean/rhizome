@@ -93,7 +93,7 @@ console.log(`address    ${deployed.contract_address}`);
 
 cfg.sepolia.vesu = {
   kind: "mock",
-  note: "MockVesuVault over real Sepolia STRK, 1:1 shares. A test double for rehearsing the vault leg — Vesu has no Sepolia deployment. Not an ERC-4626: no asset() or convert_to_assets().",
+  note: "MockVesuVault over real Sepolia STRK, with wallet-discoverable ERC-20 metadata and 1:1 shares. A minimal test double for rehearsing the vault leg — Vesu has no Sepolia deployment; not a production ERC-4626 implementation.",
   vTokens: { STRK: deployed.contract_address },
   classHash: declared.class_hash,
 };

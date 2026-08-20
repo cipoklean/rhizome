@@ -170,8 +170,40 @@ for (const [network, net] of Object.entries(cfg).filter(([k]) => k !== "$comment
       walk(cls.abi);
 
       if (isMockVenue) {
-        console.log("  ..   venue is a declared test double (MockVesuVault), not an ERC-4626");
-        for (const fn of required) check(`mock vault exposes ${fn}()`, names.has(fn));
+        console.log("  ..   venue is a minimal Sepolia test double (MockVesuVault)");
+        for (const fn of [
+          ...required,
+          "name",
+          "symbol",
+          "decimals",
+          "asset",
+          "convert_to_assets",
+        ]) {
+          check(`mock vault exposes ${fn}()`, names.has(fn));
+        }
+
+        const [assetAddr] = await callFn(provider, vToken, "asset");
+        const expectedAsset = net.tokens?.STRK ?? cfg.mainnet.tokens.STRK;
+        check(
+          "mock vault asset() is STRK",
+          same(assetAddr, expectedAsset),
+          same(assetAddr, expectedAsset) ? undefined : `got ${assetAddr}`,
+        );
+        const [decimals] = await callFn(provider, vToken, "decimals");
+        check(
+          "mock vault shares use 18 decimals",
+          BigInt(decimals) === 18n,
+          BigInt(decimals) === 18n ? undefined : `got ${decimals}`,
+        );
+        const name = await callFn(provider, vToken, "name");
+        const symbol = await callFn(provider, vToken, "symbol");
+        check("mock vault name() is callable", name.length > 0);
+        check("mock vault symbol() is callable", symbol.length > 0);
+        const converted = await callFn(provider, vToken, "convert_to_assets", ["0x1", "0x0"]);
+        check(
+          "mock vault converts shares 1:1",
+          BigInt(converted[0]) === 1n && BigInt(converted[1] ?? 0) === 0n,
+        );
 
         const liveClass = await provider.getClassHashAt(vToken);
         if (net.vesu.classHash) {
@@ -193,10 +225,6 @@ for (const [network, net] of Object.entries(cfg).filter(([k]) => k !== "$comment
             same(liveClass, computed) ? undefined : `artifact hashes to ${computed}`,
           );
         }
-        // The mock stores its underlying without a getter, so this is the one
-        // fact about it that cannot be checked on-chain. Say so rather than
-        // implying it was verified.
-        console.log("  ..   mock vault's underlying token is not readable on-chain (no asset())");
       } else {
         const [assetAddr] = await callFn(provider, vToken, "asset");
         const expectedAsset = net.tokens.STRK;
