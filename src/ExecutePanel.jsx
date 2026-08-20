@@ -535,7 +535,36 @@ export default function ExecutePanel({
           </span>
           <span className="tag">{support.supported ? "strk20 capable" : "not strk20 capable"}</span>
           {account && <span className="tag">{account.address.slice(0, 12)}…</span>}
+          {ready && (
+            <span className={`tag ${schedule?.length > 0 ? "hot" : ""}`}>
+              {schedule?.length > 0
+                ? `${schedule.length} executable leg${schedule.length === 1 ? "" : "s"}`
+                : "no executable schedule"}
+            </span>
+          )}
         </div>
+      )}
+
+      {wallets && !ready && (
+        <p className="status" style={{ marginTop: 18 }}>
+          Execution controls are locked until a STRK20-capable wallet is authorized on{" "}
+          {net.chainId}.
+        </p>
+      )}
+
+      {ready && (!schedule || schedule.length === 0) && (
+        <p className="err" style={{ marginTop: 18 }}>
+          Execution controls are locked because the frontier has no schedule. Enter a position above
+          the fee floor and wait for the public-leg analysis above to finish. For the Sepolia
+          rehearsal, use 10 STRK.
+        </p>
+      )}
+
+      {ready && schedule?.length > 0 && (
+        <p className="status" style={{ marginTop: 18 }}>
+          Execution ready: {schedule.length} leg{schedule.length === 1 ? "" : "s"}. The free shield
+          dry run is directly below the balance section.
+        </p>
       )}
 
       {balances && (
