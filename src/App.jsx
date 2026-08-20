@@ -578,6 +578,7 @@ export default function App() {
       )}
 
       <ExecutePanel
+        key={network}
         net={cfg[network]}
         network={network}
         token={cfg[network].tokens?.STRK ?? cfg.mainnet.tokens.STRK}

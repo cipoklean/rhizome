@@ -9,7 +9,7 @@
 //   walletV6.supportedWalletApi      capability detection
 //   strk20Balances / strk20PrepareInvoke / strk20InvokeTransaction
 
-import { WalletAccountV6, walletV6 } from "starknet";
+import { WalletAccountV6, constants, walletV6 } from "starknet";
 
 /** LendingOperation variants, in Cairo declaration order. */
 export const OPERATION = { Deposit: "0x0", Withdraw: "0x1" };
@@ -44,6 +44,74 @@ export async function checkStrk20Support(wallet) {
 
 export async function connectWallet(wallet, nodeUrl) {
   return WalletAccountV6.connect({ nodeUrl }, wallet);
+}
+
+/**
+ * Resolve config's readable chain aliases to the felt chain id the Wallet API
+ * requires. Accepting the felt too keeps this helper usable outside config.
+ */
+export function resolveChainId(chainId) {
+  const resolved = constants.StarknetChainId[chainId] ?? chainId;
+  if (typeof resolved !== "string" || !/^0x[0-9a-f]+$/i.test(resolved)) {
+    throw new Error(`unknown Starknet chain id "${chainId}"`);
+  }
+  return "0x" + BigInt(resolved).toString(16);
+}
+
+/** Chain ids are felts: zero-padding and letter case are not identity. */
+export function sameChain(a, b) {
+  try {
+    return BigInt(resolveChainId(a)) === BigInt(resolveChainId(b));
+  } catch {
+    return false;
+  }
+}
+
+/** The wallet's write chain — not the RPC chain the dapp uses for reads. */
+export async function walletChainId(wallet, api = walletV6) {
+  return api.requestChainId(wallet);
+}
+
+/**
+ * Put the wallet on the selected network, or fail closed.
+ *
+ * A WalletAccount has two networks: its provider handles reads and the injected
+ * wallet handles writes. Merely constructing it with a Sepolia RPC does not move
+ * Ready off mainnet; without this check the UI reads testnet, signs mainnet and
+ * fails in ways that look like bad STRK20 calldata.
+ *
+ * The Wallet API can request a switch even when Ready does not expose a manual
+ * network picker. Verify after the request — a truthy response is not evidence
+ * that the wallet actually moved, and submitting across a mismatch is worse than
+ * refusing to submit.
+ */
+export async function ensureWalletChain(wallet, targetChainId, api = walletV6) {
+  const expected = resolveChainId(targetChainId);
+  const before = await walletChainId(wallet, api);
+  if (sameChain(before, expected)) {
+    return { chainId: expected, previousChainId: resolveChainId(before), switched: false };
+  }
+
+  let accepted;
+  try {
+    accepted = await api.switchStarknetChain(wallet, expected);
+  } catch (e) {
+    throw new Error(
+      `wallet network switch to ${targetChainId} failed or was rejected: ${e.message}`,
+    );
+  }
+  if (accepted === false) {
+    throw new Error(`wallet refused to switch to ${targetChainId}`);
+  }
+
+  const after = await walletChainId(wallet, api);
+  if (!sameChain(after, expected)) {
+    throw new Error(
+      `wallet is still on ${after}; selected network is ${targetChainId}. No transaction was sent.`,
+    );
+  }
+
+  return { chainId: expected, previousChainId: resolveChainId(before), switched: true };
 }
 
 /** Shielded balances, read through the wallet — no viewing key in the app. */

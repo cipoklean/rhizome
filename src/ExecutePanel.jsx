@@ -11,6 +11,7 @@ import {
   confirm,
   connectWallet,
   dryRun,
+  ensureWalletChain,
   execute,
   listWallets,
   shieldedBalances,
@@ -44,6 +45,7 @@ export default function ExecutePanel({
   secondsPerBlock,
 }) {
   const [wallets, setWallets] = useState(null);
+  const [selectedWallet, setSelectedWallet] = useState(null);
   const [account, setAccount] = useState(null);
   const [support, setSupport] = useState(null);
   const [balances, setBalances] = useState(null);
@@ -111,11 +113,22 @@ export default function ExecutePanel({
         );
         return;
       }
+
+      say(`Requesting ${wallet.name} switch to ${net.chainId}…`);
+      const chain = await ensureWalletChain(wallet, net.chainId);
+      if (chain.switched) say(`${wallet.name} switched to ${net.chainId}.`, "ok");
+      else say(`${wallet.name} is already on ${net.chainId}.`);
+
       const acc = await connectWallet(wallet, net.rpc[0]);
+      setSelectedWallet(wallet);
       setAccount(acc);
-      say(`Connected ${wallet.name} · ${acc.address.slice(0, 10)}…`);
+      say(`Connected ${wallet.name} · ${acc.address.slice(0, 10)}… · ${net.chainId}`);
 
       const tokens = [token, vToken].filter(Boolean);
+      // Check again immediately before the wallet-mediated read. A rejected or
+      // ineffective switch must not turn a mainnet balance prompt into a
+      // "Sepolia" UI.
+      await ensureWalletChain(wallet, net.chainId);
       const b = await shieldedBalances(acc, tokens);
       setBalances(b);
       say("Read shielded balances through the wallet.");
@@ -141,11 +154,21 @@ export default function ExecutePanel({
 
   const patch = (i, fields) => setLegs((l) => ({ ...l, [i]: { ...(l[i] ?? {}), ...fields } }));
 
+  /**
+   * The user can switch Ready after connecting. Re-check before every proof or
+   * submission so reads from Sepolia can never be paired with writes to mainnet.
+   */
+  async function requireSelectedChain() {
+    if (!selectedWallet) throw new Error("wallet is not connected");
+    return ensureWalletChain(selectedWallet, net.chainId);
+  }
+
   /** Stage 0: prove the shield shape once, for free, before spending a fee on it. */
   async function dryRunShield() {
     if (!account || !schedule?.length) return;
     setBusy("dryrun-shield");
     try {
+      await requireSelectedChain();
       await dryRun(account, shieldActionsFor(schedule[0]));
       setShieldDryRun(true);
       say("Shield dry run passed. Stage 1 unlocked.", "ok");
@@ -163,6 +186,7 @@ export default function ExecutePanel({
     setBusy(`shield-${i}`);
     patch(i, { stage: "shielding" });
     try {
+      await requireSelectedChain();
       say(`Leg ${i + 1}: shielding ${strk(schedule[i].amount)} STRK — expect two prompts (approve, then deposit).`);
       const { transaction_hash } = await execute(account, shieldActionsFor(schedule[i]));
       patch(i, { shieldTx: transaction_hash });
@@ -191,6 +215,7 @@ export default function ExecutePanel({
     if (!account) return;
     setBusy(`dryrun-invest-${i}`);
     try {
+      await requireSelectedChain();
       await dryRun(account, investActionsFor(schedule[i]));
       patch(i, { investDryRun: true });
       say(`Leg ${i + 1} vault dry run passed (${shape}).`, "ok");
@@ -207,6 +232,7 @@ export default function ExecutePanel({
     if (!account || !legs[i]?.investDryRun) return;
     setBusy(`invest-${i}`);
     try {
+      await requireSelectedChain();
       const { transaction_hash } = await execute(account, investActionsFor(schedule[i]));
       patch(i, { stage: "invested", investTx: transaction_hash });
       say(`Leg ${i + 1} vault action submitted: ${transaction_hash}`, "ok");
