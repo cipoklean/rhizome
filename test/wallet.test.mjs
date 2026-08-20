@@ -7,6 +7,7 @@ import {
   ensureWalletChain,
   resolveChainId,
   sameChain,
+  supportsStrk20PrivateDefiVersion,
 } from "../src/lib/wallet.mjs";
 
 const MAIN = "0x534e5f4d41494e";
@@ -33,6 +34,17 @@ function mockApi(initial, { accepts = true, actuallySwitches = true, error = nul
     },
   };
 }
+
+test("private DeFi requires Wallet API 0.10.3 or newer", () => {
+  assert.equal(supportsStrk20PrivateDefiVersion("0.10"), false);
+  assert.equal(supportsStrk20PrivateDefiVersion("0.10.2"), false);
+  assert.equal(supportsStrk20PrivateDefiVersion("0.10.3"), true);
+  assert.equal(supportsStrk20PrivateDefiVersion("0.10.4"), true);
+  assert.equal(supportsStrk20PrivateDefiVersion("0.11"), true);
+  assert.equal(supportsStrk20PrivateDefiVersion("1.0"), true);
+  assert.equal(supportsStrk20PrivateDefiVersion("0.10.3-rc.3"), false);
+  assert.equal(supportsStrk20PrivateDefiVersion("garbage"), false);
+});
 
 test("readable config aliases resolve to Wallet API chain felts", () => {
   assert.equal(resolveChainId("SN_MAIN"), MAIN);

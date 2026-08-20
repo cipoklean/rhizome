@@ -163,7 +163,7 @@ export default function ExecutePanel({
       setSupport(cap);
       if (!cap.supported) {
         say(
-          `${wallet.name} reports Wallet API ${cap.versions.join(", ") || "unknown"} — STRK20 needs 0.10 or higher.`,
+          `${wallet.name} reports Wallet API ${cap.versions.join(", ") || "unknown"} — STRK20 private DeFi needs ${cap.minimumVersion} or higher.`,
           "err",
         );
         return;
@@ -579,7 +579,9 @@ export default function ExecutePanel({
           <span className={`tag ${support.supported ? "hot" : ""}`}>
             wallet api {support.versions.join(" / ") || "unknown"}
           </span>
-          <span className="tag">{support.supported ? "strk20 capable" : "not strk20 capable"}</span>
+          <span className="tag">
+            {support.supported ? "private DeFi capable" : `needs Wallet API ${support.minimumVersion}`}
+          </span>
           {account && <span className="tag">{account.address.slice(0, 12)}…</span>}
           {ready && (
             <span className={`tag ${schedule?.length > 0 ? "hot" : ""}`}>

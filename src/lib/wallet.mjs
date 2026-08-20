@@ -28,17 +28,34 @@ export async function listWallets() {
  * need. The wallet-standard feature version (`1.0.0`) says nothing about STRK20
  * support — only the Wallet API version does.
  */
+export const MIN_STRK20_WALLET_API = "0.10.3";
+
+/** Private DeFi was added in Wallet API 0.10.3, not the 0.10 line generally. */
+export function supportsStrk20PrivateDefiVersion(version) {
+  const parts = String(version).split(".");
+  if (parts.length < 2 || parts.length > 3 || parts.some((part) => !/^\d+$/.test(part))) {
+    return false;
+  }
+  const [major, minor, patch = "0"] = parts.map(Number);
+  if (major > 0) return true;
+  if (major !== 0) return false;
+  if (minor > 10) return true;
+  return minor === 10 && patch >= 3;
+}
+
 export async function checkStrk20Support(wallet) {
   try {
     const versions = await walletV6.supportedWalletApi(wallet);
     const list = Array.isArray(versions) ? versions : [versions];
-    const supported = list.some((v) => {
-      const [major, minor] = String(v).split(".").map(Number);
-      return major === 0 ? minor >= 10 : major > 0;
-    });
-    return { supported, versions: list };
+    const supported = list.some(supportsStrk20PrivateDefiVersion);
+    return { supported, versions: list, minimumVersion: MIN_STRK20_WALLET_API };
   } catch (e) {
-    return { supported: false, versions: [], error: e.message };
+    return {
+      supported: false,
+      versions: [],
+      minimumVersion: MIN_STRK20_WALLET_API,
+      error: e.message,
+    };
   }
 }
 

@@ -95,7 +95,11 @@ pub mod MockERC20 {
 
 #[starknet::interface]
 pub trait IMockVault<TContractState> {
-    // Share-token ERC-20 surface.
+    // Share-token ERC-20 surface. Metadata is required by Wallet API clients
+    // before they can construct an open note for this token.
+    fn name(self: @TContractState) -> ByteArray;
+    fn symbol(self: @TContractState) -> ByteArray;
+    fn decimals(self: @TContractState) -> u8;
     fn total_supply(self: @TContractState) -> u256;
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
     fn allowance(self: @TContractState, owner: ContractAddress, spender: ContractAddress) -> u256;
@@ -107,7 +111,9 @@ pub trait IMockVault<TContractState> {
         amount: u256,
     ) -> bool;
     fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
-    // Vault surface.
+    // Minimal 1:1 ERC-4626/Vesu-style vault surface.
+    fn asset(self: @TContractState) -> ContractAddress;
+    fn convert_to_assets(self: @TContractState, shares: u256) -> u256;
     fn deposit(ref self: TContractState, assets: u256, receiver: ContractAddress) -> u256;
     fn withdraw(
         ref self: TContractState, assets: u256, receiver: ContractAddress, owner: ContractAddress,
@@ -147,6 +153,18 @@ pub mod MockVesuVault {
 
     #[abi(embed_v0)]
     pub impl MockVaultImpl of IMockVault<ContractState> {
+        fn name(self: @ContractState) -> ByteArray {
+            "Rhizome Vesu STRK"
+        }
+
+        fn symbol(self: @ContractState) -> ByteArray {
+            "rvSTRK"
+        }
+
+        fn decimals(self: @ContractState) -> u8 {
+            18
+        }
+
         fn total_supply(self: @ContractState) -> u256 {
             self.supply.read()
         }
@@ -191,6 +209,14 @@ pub mod MockVesuVault {
             let caller = get_caller_address();
             self.allowances.write((caller, spender), amount);
             true
+        }
+
+        fn asset(self: @ContractState) -> ContractAddress {
+            self.underlying.read()
+        }
+
+        fn convert_to_assets(self: @ContractState, shares: u256) -> u256 {
+            shares
         }
 
         fn deposit(ref self: ContractState, assets: u256, receiver: ContractAddress) -> u256 {

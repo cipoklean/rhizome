@@ -46,6 +46,17 @@ fn anonymizer_deploys() {
 }
 
 #[test]
+fn vault_exposes_wallet_compatible_token_metadata() {
+    let (underlying, vault, _) = setup(true);
+
+    assert!(vault.name() == "Rhizome Vesu STRK", "vault name must be standard ERC20 metadata");
+    assert!(vault.symbol() == "rvSTRK", "vault symbol must fit Wallet API token constraints");
+    assert!(vault.decimals() == 18, "vault shares must use STRK precision");
+    assert!(vault.asset() == underlying.contract_address, "vault asset must be the underlying");
+    assert!(vault.convert_to_assets(ASSETS) == ASSETS, "mock vault must remain one-to-one");
+}
+
+#[test]
 fn deposit_credits_open_note_with_shares() {
     let (underlying, vault, anon_addr) = setup(true);
 
