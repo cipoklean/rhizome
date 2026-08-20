@@ -103,6 +103,11 @@ export default function ExecutePanel({
   async function pick(wallet) {
     setBusy("connect");
     setShieldDryRun(false);
+    setSelectedWallet(null);
+    setAccount(null);
+    setBalances(null);
+    let phase = "capability check";
+
     try {
       const cap = await checkStrk20Support(wallet);
       setSupport(cap);
@@ -114,26 +119,54 @@ export default function ExecutePanel({
         return;
       }
 
-      say(`Requesting ${wallet.name} switch to ${net.chainId}…`);
-      const chain = await ensureWalletChain(wallet, net.chainId);
-      if (chain.switched) say(`${wallet.name} switched to ${net.chainId}.`, "ok");
-      else say(`${wallet.name} is already on ${net.chainId}.`);
+      // Authorization has to come first. Wallet-side calls such as
+      // requestChainId and switchStarknetChain are scoped to an authorized dapp;
+      // asking before WalletAccountV6.connect produces Ready's correct but
+      // unhelpful "Not preauthorized" error.
+      phase = "authorization";
+      say(`Authorize Rhizome in ${wallet.name}…`);
+      let acc = await connectWallet(wallet, net.rpc[0]);
+      say(`${wallet.name} authorized Rhizome.`, "ok");
 
-      const acc = await connectWallet(wallet, net.rpc[0]);
+      phase = "network switch";
+      say(`Checking ${wallet.name}'s write network…`);
+      const chain = await ensureWalletChain(wallet, net.chainId);
+      if (chain.switched) {
+        say(`${wallet.name} switched to ${net.chainId}.`, "ok");
+
+        // starknet.js explicitly recommends a new WalletAccount after a network
+        // change. Reconstruct silently from the account the user just allowed;
+        // do not turn one Connect click into a second authorization prompt.
+        phase = "account refresh";
+        acc = await connectWallet(wallet, net.rpc[0], { silent: true });
+      } else {
+        say(`${wallet.name} is already on ${net.chainId}.`);
+      }
+
       setSelectedWallet(wallet);
       setAccount(acc);
-      say(`Connected ${wallet.name} · ${acc.address.slice(0, 10)}… · ${net.chainId}`);
+      say(`Ready · ${acc.address.slice(0, 10)}… · ${net.chainId}`, "ok");
 
+      // Balance access is separate consent, not connection. Rejecting it must
+      // not discard an otherwise usable account or report "Connect failed".
+      phase = "balance consent";
       const tokens = [token, vToken].filter(Boolean);
-      // Check again immediately before the wallet-mediated read. A rejected or
-      // ineffective switch must not turn a mainnet balance prompt into a
-      // "Sepolia" UI.
-      await ensureWalletChain(wallet, net.chainId);
-      const b = await shieldedBalances(acc, tokens);
-      setBalances(b);
-      say("Read shielded balances through the wallet.");
+      try {
+        await ensureWalletChain(wallet, net.chainId);
+        const b = await shieldedBalances(acc, tokens);
+        setBalances(b);
+        say("Read shielded balances through the wallet.");
+      } catch (e) {
+        say(`Shielded balances not shared: ${e.message}. Execution is still available.`, "info");
+      }
     } catch (e) {
-      say(`Connect failed: ${e.message}`, "err");
+      const labels = {
+        "capability check": "Wallet capability check failed",
+        authorization: "Ready authorization failed",
+        "network switch": `Switch to ${net.chainId} failed`,
+        "account refresh": "Wallet account refresh failed after switching networks",
+      };
+      say(`${labels[phase] ?? "Wallet connection failed"}: ${e.message}`, "err");
     } finally {
       setBusy(null);
     }

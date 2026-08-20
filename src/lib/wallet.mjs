@@ -42,8 +42,11 @@ export async function checkStrk20Support(wallet) {
   }
 }
 
-export async function connectWallet(wallet, nodeUrl) {
-  return WalletAccountV6.connect({ nodeUrl }, wallet);
+export async function connectWallet(wallet, nodeUrl, { silent = false } = {}) {
+  const provider = { nodeUrl };
+  return silent
+    ? WalletAccountV6.connectSilent(provider, wallet)
+    : WalletAccountV6.connect(provider, wallet);
 }
 
 /**
@@ -81,8 +84,9 @@ export async function walletChainId(wallet, api = walletV6) {
  * fails in ways that look like bad STRK20 calldata.
  *
  * The Wallet API can request a switch even when Ready does not expose a manual
- * network picker. Verify after the request — a truthy response is not evidence
- * that the wallet actually moved, and submitting across a mismatch is worse than
+ * network picker, but only after WalletAccountV6.connect has authorized the
+ * dapp. Verify after the request — a truthy response is not evidence that the
+ * wallet actually moved, and submitting across a mismatch is worse than
  * refusing to submit.
  */
 export async function ensureWalletChain(wallet, targetChainId, api = walletV6) {
