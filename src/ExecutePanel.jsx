@@ -8,7 +8,7 @@ import {
 import { connect } from "./lib/pool.mjs";
 import { FEE_MODELS } from "./lib/frontier.mjs";
 import { NOTE_MATURITY_BLOCKS, formatDelay } from "./lib/timing.mjs";
-import { formatUnits } from "./lib/units.mjs";
+import { formatUnits, parseUnits } from "./lib/units.mjs";
 import {
   OPERATION,
   buildShieldActions,
@@ -59,6 +59,8 @@ export default function ExecutePanel({
   const [support, setSupport] = useState(null);
   const [balances, setBalances] = useState(null);
   const [shape, setShape] = useState("implicit");
+  const [directVaultAmount, setDirectVaultAmount] = useState("1");
+  const [directVaultPassed, setDirectVaultPassed] = useState(null);
   const [busy, setBusy] = useState(null);
   const [log, setLog] = useState([]);
   const [shieldDryRun, setShieldDryRun] = useState(false);
@@ -254,6 +256,38 @@ export default function ExecutePanel({
     } catch (e) {
       setShieldDryRun(false);
       say(`Shield dry run rejected: ${e.message}`, "err");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Prove the vault leg directly against funds already shielded in Ready.
+   *
+   * This is the missing diagnostic between a successful shield dry run and a
+   * paid two-stage execution. It spends nothing, creates no transaction and
+   * does not pretend stage 1 happened; it only settles which helper action
+   * shape the wallet/pool accepts. The pool fee still participates in balance
+   * conservation during proving, so the account needs the requested amount plus
+   * enough shielded STRK for the fee.
+   */
+  async function dryRunExistingVault() {
+    if (!account || !deployed) return;
+    setBusy("dryrun-existing-vault");
+    setDirectVaultPassed(null);
+    try {
+      const amount = parseUnits(directVaultAmount, 18);
+      if (amount <= 0n) throw new Error("enter a vault amount above zero");
+      await requireSelectedChain();
+      await dryRun(account, investActionsFor({ amount }));
+      setDirectVaultPassed(shape);
+      say(
+        `Direct vault dry run passed (${shape}, ${strk(amount)} STRK from existing shielded funds). No transaction sent.`,
+        "ok",
+      );
+    } catch (e) {
+      setDirectVaultPassed(null);
+      say(`Direct vault dry run rejected (${shape}): ${e.message}`, "err");
     } finally {
       setBusy(null);
     }
@@ -517,6 +551,7 @@ export default function ExecutePanel({
               value={shape}
               onChange={(e) => {
                 setShape(e.target.value);
+                setDirectVaultPassed(null);
                 setLegs((l) =>
                   Object.fromEntries(
                     Object.entries(l).map(([k, v]) => [k, { ...v, investDryRun: false }]),
@@ -579,6 +614,45 @@ export default function ExecutePanel({
             </>
           )}
         </p>
+      )}
+
+      {ready && deployed && network === "sepolia" && (
+        <div className="verdict" style={{ marginTop: 22 }}>
+          <h3>Test stage 2 with funds already shielded.</h3>
+          <p>
+            This proves the selected vault action shape without submitting stage 1 or spending a
+            pool fee. It uses your existing shielded STRK and sends no transaction. Start with 1
+            STRK; proving also needs enough shielded STRK to account for the 2 STRK Sepolia pool fee.
+          </p>
+          <div className="controls" style={{ marginTop: 18 }}>
+            <label className="field">
+              Vault dry-run amount (STRK)
+              <input
+                type="text"
+                inputMode="decimal"
+                value={directVaultAmount}
+                onChange={(e) => {
+                  setDirectVaultAmount(e.target.value);
+                  setDirectVaultPassed(null);
+                }}
+                aria-label="Direct vault dry-run amount in STRK"
+              />
+            </label>
+            <button
+              type="button"
+              className="chip"
+              onClick={dryRunExistingVault}
+              disabled={busy !== null}
+              aria-pressed={directVaultPassed === shape}
+            >
+              {busy === "dryrun-existing-vault"
+                ? "proving…"
+                : directVaultPassed === shape
+                  ? `vault dry run passed (${shape}) ✓`
+                  : `Dry run vault (${shape}, free) →`}
+            </button>
+          </div>
+        </div>
       )}
 
       {balances && (

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ensureWalletChain, resolveChainId, sameChain } from "../src/lib/wallet.mjs";
+import {
+  OPERATION,
+  buildTrancheActions,
+  ensureWalletChain,
+  resolveChainId,
+  sameChain,
+} from "../src/lib/wallet.mjs";
 
 const MAIN = "0x534e5f4d41494e";
 const SEPOLIA = "0x534e5f5345504f4c4941";
@@ -80,4 +86,43 @@ test("a wallet switch exception keeps the useful cause", async () => {
     ensureWalletChain(wallet, "SN_SEPOLIA", api),
     /switch to SN_SEPOLIA failed or was rejected: user rejected request/,
   );
+});
+
+
+test("the documented vault dry run opens an output note then invokes", () => {
+  const actions = buildTrancheActions({
+    anonymizer: "0xaaa",
+    inToken: "0x111",
+    outToken: "0x222",
+    amount: 1n,
+    recipient: "0x333",
+    operation: OPERATION.Deposit,
+    shape: "implicit",
+  });
+  assert.deepEqual(actions, [
+    { type: "transfer", token: "0x222", amount: "OPEN", recipient: "0x333" },
+    {
+      type: "invoke",
+      contract: "0xaaa",
+      calldata: ["0x0", "0x111", "0x222", "0x1", "0x0", "${openNoteIds[0]}"],
+    },
+  ]);
+});
+
+test("the explicit vault shape funds the helper before invoking it", () => {
+  const actions = buildTrancheActions({
+    anonymizer: "0xaaa",
+    inToken: "0x111",
+    outToken: "0x222",
+    amount: 1n,
+    recipient: "0x333",
+    shape: "explicit-withdraw",
+  });
+  assert.deepEqual(actions.map((a) => a.type), ["transfer", "withdraw", "invoke"]);
+  assert.deepEqual(actions[1], {
+    type: "withdraw",
+    token: "0x111",
+    amount: "0x1",
+    recipient: "0xaaa",
+  });
 });
