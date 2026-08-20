@@ -44,6 +44,9 @@ export default function ExecutePanel({
   net,
   network,
   schedule,
+  scheduleSource,
+  paidSubmissionAllowed,
+  analysisError,
   token,
   fee,
   feeModel,
@@ -270,7 +273,7 @@ export default function ExecutePanel({
 
   /** Stage 1: the public deposit leg — the amount the analysis chose. */
   async function shield(i) {
-    if (!account || !shieldDryRun) return;
+    if (!account || !shieldDryRun || !paidSubmissionAllowed) return;
     setBusy(`shield-${i}`);
     patch(i, { stage: "shielding" });
     try {
@@ -538,7 +541,9 @@ export default function ExecutePanel({
           {ready && (
             <span className={`tag ${schedule?.length > 0 ? "hot" : ""}`}>
               {schedule?.length > 0
-                ? `${schedule.length} executable leg${schedule.length === 1 ? "" : "s"}`
+                ? scheduleSource === "sepolia-rehearsal"
+                  ? "1 free dry-run rehearsal leg"
+                  : `${schedule.length} executable leg${schedule.length === 1 ? "" : "s"}`
                 : "no executable schedule"}
             </span>
           )}
@@ -554,16 +559,25 @@ export default function ExecutePanel({
 
       {ready && (!schedule || schedule.length === 0) && (
         <p className="err" style={{ marginTop: 18 }}>
-          Execution controls are locked because the frontier has no schedule. Enter a position above
-          the fee floor and wait for the public-leg analysis above to finish. For the Sepolia
-          rehearsal, use 10 STRK.
+          Execution controls are locked because there is no valid rehearsal amount.
+          {analysisError ? ` Frontier: ${analysisError}` : ""} Enter 10 STRK on Sepolia.
         </p>
       )}
 
       {ready && schedule?.length > 0 && (
         <p className="status" style={{ marginTop: 18 }}>
-          Execution ready: {schedule.length} leg{schedule.length === 1 ? "" : "s"}. The free shield
-          dry run is directly below the balance section.
+          {scheduleSource === "sepolia-rehearsal" ? (
+            <>
+              Free rehearsal ready: prove one {strk(schedule[0].amount)} STRK shield action below.
+              This fallback is not a cohort recommendation, and paid submission stays locked until
+              fee-net amount handling is verified.
+            </>
+          ) : (
+            <>
+              Execution ready: {schedule.length} leg{schedule.length === 1 ? "" : "s"}. The free
+              shield dry run is directly below the balance section.
+            </>
+          )}
         </p>
       )}
 
@@ -639,10 +653,13 @@ export default function ExecutePanel({
                           disabled={
                             busy !== null ||
                             Boolean(state.shieldedAt) ||
+                            !paidSubmissionAllowed ||
                             (!state.shieldTx && !shieldDryRun)
                           }
                         >
-                          {busy === `shield-${i}`
+                          {!paidSubmissionAllowed
+                            ? "paid submit locked"
+                            : busy === `shield-${i}`
                             ? "submitting…"
                             : busy === `check-shield-${i}`
                               ? "checking…"

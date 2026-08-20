@@ -116,3 +116,19 @@ export function writeExecutionProgress(storage, key, progress, scheduleLength) {
     // UI should not turn a browser policy into a transaction failure.
   }
 }
+
+
+/**
+ * One synthetic Sepolia leg for proving action shapes when analytics cannot
+ * produce a schedule. It is intentionally not a privacy recommendation.
+ *
+ * Keep it above two pool fees because the real entry path is shield + invoke;
+ * accepting a smaller amount would present a rehearsal that cannot possibly
+ * become a paid two-stage leg.
+ */
+export function buildRehearsalFallback({ amount, feeAmount, score = {} }) {
+  const value = BigInt(amount);
+  const fee = BigInt(feeAmount);
+  if (value <= fee * 2n) return [];
+  return [{ ...score, amount: value, covered: false, rehearsal: true }];
+}

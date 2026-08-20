@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import cfg from "../config/addresses.json";
 import ExecutePanel from "./ExecutePanel.jsx";
+import { buildRehearsalFallback } from "./lib/execution.mjs";
 import FrontierChart from "./FrontierChart.jsx";
 import { amountHistogram, popularAmounts, roundTripCohort } from "./lib/cohorts.mjs";
 import { DEFAULT_FEE_MODEL, FEE_MODELS, computeFrontier, recommend } from "./lib/frontier.mjs";
@@ -166,6 +167,54 @@ export default function App() {
     }
     return { rows, rec: recommend(rows), position };
   }, [state, positionText, feeModel]);
+
+  const executionPlan = useMemo(() => {
+    const recommended = analysis?.rec?.schedule;
+    if (recommended?.length) {
+      return { schedule: recommended, source: "frontier", paidSubmissionAllowed: true };
+    }
+
+    // A free wallet action-shape dry run does not need a cohort frontier. On
+    // Sepolia, synthesize one clearly labelled leg from the amount field so
+    // Ready can prove the deposit action even if event analysis is loading,
+    // unavailable, or cannot produce an affordable recommendation.
+    if (network !== "sepolia" || state.status !== "ready" || !state.fee) {
+      return { schedule: [], source: "none", paidSubmissionAllowed: false };
+    }
+
+    let amount;
+    try {
+      amount = parseUnits(positionText || "0", 18);
+    } catch {
+      return { schedule: [], source: "none", paidSubmissionAllowed: false };
+    }
+
+    const scored = state.entryHist
+      ? roundTripCohort(state.entryHist, state.exitHist, amount)
+      : {
+          amount,
+          entryCohort: 0,
+          exitCohort: null,
+          cohort: 0,
+          distinctiveness: 1,
+          exitKnown: false,
+        };
+
+    const schedule = buildRehearsalFallback({
+      amount,
+      feeAmount: state.fee,
+      score: scored,
+    });
+    if (schedule.length === 0) {
+      return { schedule: [], source: "none", paidSubmissionAllowed: false };
+    }
+
+    return {
+      source: "sepolia-rehearsal",
+      paidSubmissionAllowed: false,
+      schedule,
+    };
+  }, [analysis, network, state, positionText]);
 
   const strk = (v) => formatUnits(v, 18, { maxFractionDigits: 4 });
   const maxCohort = Math.max(1, ...(stats?.popular ?? []).map((p) => p.entryCohort));
@@ -582,7 +631,10 @@ export default function App() {
         net={cfg[network]}
         network={network}
         token={cfg[network].tokens?.STRK ?? cfg.mainnet.tokens.STRK}
-        schedule={analysis?.rec?.schedule ?? []}
+        schedule={executionPlan.schedule}
+        scheduleSource={executionPlan.source}
+        paidSubmissionAllowed={executionPlan.paidSubmissionAllowed}
+        analysisError={analysis?.error ?? null}
         fee={state.fee ?? null}
         feeModel={feeModel}
         delay={timing?.rec ?? null}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   acceptedReceiptBlock,
+  buildRehearsalFallback,
   executionProgressKey,
   readExecutionProgress,
   sanitizeExecutionProgress,
@@ -122,4 +123,22 @@ test("progress round-trips through storage and resets dry-run gates", () => {
   assert.deepEqual(readExecutionProgress(storage, "k", 1), {
     0: { stage: "shielded", shieldTx: "0xabc", shieldedAt: 123, investDryRun: false },
   });
+});
+
+
+test("a Sepolia rehearsal fallback exists above the two-operation fee floor", () => {
+  const score = { entryCohort: 95, exitCohort: 27, exitKnown: true };
+  assert.deepEqual(buildRehearsalFallback({ amount: 10n, feeAmount: 2n, score }), [
+    {
+      ...score,
+      amount: 10n,
+      covered: false,
+      rehearsal: true,
+    },
+  ]);
+});
+
+test("a rehearsal fallback refuses amounts consumed by two pool fees", () => {
+  assert.deepEqual(buildRehearsalFallback({ amount: 4n, feeAmount: 2n }), []);
+  assert.deepEqual(buildRehearsalFallback({ amount: 3n, feeAmount: 2n }), []);
 });
