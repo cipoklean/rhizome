@@ -24,6 +24,92 @@ export async function connect(urls) {
   throw new Error(`no reachable RPC (${lastError?.message ?? "unknown"})`);
 }
 
+/** Small in-browser cache so repeat visits don't re-scan 13M blocks. */
+const CACHE_PREFIX = "rhizome:pool:v2:";
+
+/** Static snapshot shipped with the build — instant first paint on mainnet. */
+export async function loadPoolSnapshot(network) {
+  // Try compact derived file first (257 kB, 66 kB gz) — same data as full snapshot in histograms
+  const base = import.meta.env?.BASE_URL ?? "/";
+  const urls = [
+    `${base.replace(/\/$/, "/")}pool-state.${network}.json`,
+    `${base.replace(/\/$/, "/")}pool-snapshot.${network}.json`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) continue;
+      const j = await res.json();
+      // compact: has entryHist/exitHist/txBlocks; full: has deposits/withdrawals arrays
+      if (j.entryHist && j.exitHist && Array.isArray(j.txBlocks)) {
+        const entryHist = new Map(Object.entries(j.entryHist).map(([k, v]) => [BigInt(k), v]));
+        const exitHist = new Map(Object.entries(j.exitHist).map(([k, v]) => [BigInt(k), v]));
+        return {
+          block: j.block ?? 0,
+          fee: j.fee ? BigInt(j.fee) : null,
+          feeHistory: (j.feeHistory ?? []).map((h) => ({ feeAmount: BigInt(h.feeAmount), blockNumber: h.blockNumber, txHash: h.txHash })),
+          entryHist,
+          exitHist,
+          txBlocks: j.txBlocks,
+          depositsCount: typeof j.deposits === "number" ? j.deposits : null,
+          withdrawalsCount: typeof j.withdrawals === "number" ? j.withdrawals : null,
+          exitsCount: typeof j.exits === "number" ? j.exits : null,
+          feeLegsCount: typeof j.feeLegs === "number" ? j.feeLegs : null,
+          snapshotBlock: j.block ?? 0,
+          compact: true,
+        };
+      }
+      if (!j || !Array.isArray(j.deposits) || !Array.isArray(j.withdrawals)) continue;
+      return {
+        block: j.block ?? 0,
+        fee: j.fee ? BigInt(j.fee) : null,
+        deposits: j.deposits.map((d) => ({ ...d, amount: BigInt(d.amount) })),
+        withdrawals: j.withdrawals.map((w) => ({ ...w, amount: BigInt(w.amount) })),
+        feeHistory: (j.feeHistory ?? []).map((h) => ({ feeAmount: BigInt(h.feeAmount), blockNumber: h.blockNumber, txHash: h.txHash })),
+        snapshotBlock: j.block ?? 0,
+        compact: false,
+      };
+    } catch {}
+  }
+  return null;
+}
+export function cacheKey(network, token) {
+  return `${CACHE_PREFIX}${network}:${String(token).toLowerCase()}`;
+}
+export function loadPoolCache(network, token) {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(cacheKey(network, token)) : null;
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    if (!j || !Array.isArray(j.deposits) || !Array.isArray(j.withdrawals)) return null;
+    // revive BigInt amounts stored as strings
+    return {
+      block: j.block ?? 0,
+      fee: j.fee ? BigInt(j.fee) : null,
+      deposits: j.deposits.map((d) => ({ ...d, amount: BigInt(d.amount) })),
+      withdrawals: j.withdrawals.map((w) => ({ ...w, amount: BigInt(w.amount) })),
+      feeHistory: (j.feeHistory ?? []).map((h) => ({ feeAmount: BigInt(h.feeAmount), blockNumber: h.blockNumber, txHash: h.txHash })),
+      savedAt: j.savedAt ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+export function savePoolCache(network, token, { block, fee, deposits, withdrawals, feeHistory }) {
+  try {
+    if (typeof window === "undefined") return;
+    const payload = {
+      block,
+      fee: fee != null ? fee.toString() : null,
+      deposits: deposits.map((d) => ({ ...d, amount: d.amount.toString() })),
+      withdrawals: withdrawals.map((w) => ({ ...w, amount: w.amount.toString() })),
+      feeHistory: (feeHistory ?? []).map((h) => ({ feeAmount: h.feeAmount.toString(), blockNumber: h.blockNumber, txHash: h.txHash })),
+      savedAt: Date.now(),
+    };
+    window.localStorage.setItem(cacheKey(network, token), JSON.stringify(payload));
+  } catch {}
+}
+
 /**
  * The flat pool fee, read live.
  *

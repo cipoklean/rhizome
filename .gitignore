@@ -11,3 +11,7 @@ out/
 # Cairo / Scarb
 target/
 .snfoundry_cache/
+# pool build artifacts — only compact snapshot ships
+public/pool-snapshot.*.json
+!public/pool-state.*.json
+public/*.pretty.json

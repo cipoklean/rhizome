@@ -12,6 +12,9 @@ import {
   fetchFeeHistory,
   fetchWithdrawals,
   getFeeAmount,
+  loadPoolCache,
+  loadPoolSnapshot,
+  savePoolCache,
 } from "./lib/pool.mjs";
 import { formatUnits, parseUnits } from "./lib/units.mjs";
 import {
@@ -64,43 +67,209 @@ export default function App() {
     (async () => {
       try {
         const net = cfg[network];
+        const token = net.tokens?.STRK ?? cfg.mainnet.tokens.STRK;
+
+        // 1. Instant paint: snapshot shipped with the build (no RPC), then local cache
+        let base = null;
+        let baseSource = null;
+        try {
+          const snap = await loadPoolSnapshot(network);
+          if (snap && (snap.entryHist?.size || snap.deposits?.length)) {
+            base = snap;
+            baseSource = "snapshot";
+          }
+        } catch {}
+        if (!base) {
+          const cached = loadPoolCache(network, token);
+          if (cached && cached.deposits?.length) {
+            base = cached;
+            baseSource = "cache";
+          }
+        }
+        if (base && (base.entryHist?.size || base.deposits?.length)) {
+          if (base.compact) {
+            setState({
+              status: "ready",
+              block: base.block,
+              fee: base.fee ?? 6000000000000000000n,
+              feeHistory: base.feeHistory ?? [],
+              secondsPerBlock: null,
+              deposits: null,
+              withdrawals: null,
+              exits: null,
+              entryHist: base.entryHist,
+              exitHist: base.exitHist.size > 0 ? base.exitHist : null,
+              txBlocks: base.txBlocks ?? [],
+              feeLegs: null,
+              depositsCount: base.depositsCount ?? null,
+              withdrawalsCount: base.withdrawalsCount ?? null,
+              exitsCount: base.exitsCount ?? null,
+              feeLegsCount: base.feeLegsCount ?? null,
+              stale: true,
+              staleSource: baseSource,
+              compact: true,
+            });
+          } else {
+            const { positions: exits, feeLegs } = classifyWithdrawals(base.withdrawals ?? [], base.feeHistory ?? []);
+            setState({
+              status: "ready",
+              block: base.block,
+              fee: base.fee ?? 6000000000000000000n,
+              feeHistory: base.feeHistory ?? [],
+              secondsPerBlock: null,
+              deposits: base.deposits,
+              exits,
+              txBlocks: poolTransactionBlocks(feeLegs),
+              feeLegs: feeLegs.length,
+              withdrawals: (base.withdrawals ?? []).length,
+              entryHist: amountHistogram(base.deposits),
+              exitHist: exits.length > 0 ? amountHistogram(exits) : null,
+              stale: true,
+              staleSource: baseSource,
+            });
+          }
+        }
+
+        // 2. Live refresh: merge the delta since snapshot — histograms + txBlocks
         const provider = await connect(net.rpc);
-        const [block, fee, feeHistory, secondsPerBlock] = await Promise.all([
+        const [block, fee, liveFeeHistory, secondsPerBlock] = await Promise.all([
           provider.getBlockNumber(),
           getFeeAmount(provider, net.strk20Pool),
-          fetchFeeHistory(provider, net.strk20Pool),
+          fetchFeeHistory(provider, net.strk20Pool, { fromBlock: base ? Math.max(0, base.block + 1) : 0 }).catch(() => []),
           measureBlockTime(provider).catch(() => null),
         ]);
-        const token = net.tokens?.STRK ?? cfg.mainnet.tokens.STRK;
-        const [deposits, withdrawals] = await Promise.all([
-          fetchDeposits(provider, net.strk20Pool, { token }),
-          fetchWithdrawals(provider, net.strk20Pool, { token }),
-        ]);
-        if (cancelled) return;
+        const fromBlock = base ? Math.max(0, (base.block ?? 0) + 1) : 0;
+        let mergedEntryHist = base?.entryHist ? new Map(base.entryHist) : null;
+        let mergedExitHist = base?.exitHist ? new Map(base.exitHist) : null;
+        let mergedTxBlocks = base?.txBlocks ? [...base.txBlocks] : [];
+        let mergedFeeHistory = base ? [...(base.feeHistory ?? []), ...liveFeeHistory].sort((a, b) => a.blockNumber - b.blockNumber) : liveFeeHistory;
 
-        // The pool settles its own fee with an extra withdraw leg back to a fee
-        // router, so most public withdrawals are fee reimbursement rather than
-        // anybody's position. Counting them as cover would invent a cohort of
-        // thousands at exactly the fee amount. They are still useful as a census
-        // of pool transactions, which is what timing cover is measured against.
-        const { positions: exits, feeLegs } = classifyWithdrawals(withdrawals, feeHistory);
+        // If snapshots are compact we can't reconstruct event arrays — fetch only the tail
+        // as events and merge histograms directly.
+        if (fromBlock <= block) {
+          if (base?.compact) {
+            const [freshDeposits, freshWithdrawals] = await Promise.all([
+              fetchDeposits(provider, net.strk20Pool, { token, fromBlock }),
+              fetchWithdrawals(provider, net.strk20Pool, { token, fromBlock }),
+            ]);
+            if (cancelled) return;
+            // Merge fresh events into the snapshot histograms
+            for (const d of freshDeposits) mergedEntryHist.set(d.amount, (mergedEntryHist.get(d.amount) ?? 0) + 1);
+            // Need to separate fee legs vs exits for the tail — use updated fee history
+            const tailClass = classifyWithdrawals(freshWithdrawals, mergedFeeHistory);
+            for (const w of tailClass.positions) mergedExitHist.set(w.amount, (mergedExitHist.get(w.amount) ?? 0) + 1);
+            mergedTxBlocks = [...mergedTxBlocks, ...poolTransactionBlocks(tailClass.feeLegs)].sort((a, b) => a - b);
+            // Write compact cache back as histogram snapshot
+            const mergedState = {
+              block,
+              fee,
+              feeHistory: mergedFeeHistory,
+              entryHist: mergedEntryHist,
+              exitHist: mergedExitHist.size > 0 ? mergedExitHist : null,
+              txBlocks: mergedTxBlocks,
+              feeLegs: null,
+              depositsCount: (base.depositsCount ?? 0) + freshDeposits.length,
+              withdrawalsCount: (base.withdrawalsCount ?? 0) + freshWithdrawals.length,
+              exitsCount: (base.exitsCount ?? 0) + tailClass.positions.length,
+              feeLegsCount: (base.feeLegsCount ?? 0) + tailClass.feeLegs.length,
+            };
+            setState({ status: "ready", ...mergedState, secondsPerBlock, stale: false });
+            // Also persist as pool cache's expected shape for fallback paths
+            try {
+              window.localStorage.setItem(
+                `rhizome:pool:v2:${network}:${String(token).toLowerCase()}:compact`,
+                JSON.stringify({
+                  block,
+                  fee: fee.toString(),
+                  entryHist: Object.fromEntries([...mergedEntryHist.entries()].map(([k, v]) => [k.toString(), v])),
+                  exitHist: Object.fromEntries([...mergedExitHist.entries()].map(([k, v]) => [k.toString(), v])),
+                  txBlocks: mergedTxBlocks,
+                  feeHistory: mergedFeeHistory.map((h) => ({ feeAmount: h.feeAmount.toString(), blockNumber: h.blockNumber, txHash: h.txHash })),
+                  depositsCount: mergedState.depositsCount,
+                  withdrawalsCount: mergedState.withdrawalsCount,
+                  exitsCount: mergedState.exitsCount,
+                  feeLegsCount: mergedState.feeLegsCount,
+                }),
+              );
+            } catch {}
+            return;
+          }
 
+          let freshDeposits = [];
+          let freshWithdrawals = [];
+          [freshDeposits, freshWithdrawals] = await Promise.all([
+            fetchDeposits(provider, net.strk20Pool, { token, fromBlock }),
+            fetchWithdrawals(provider, net.strk20Pool, { token, fromBlock }),
+          ]);
+          if (cancelled) return;
+          const feeHistory = [...(base?.feeHistory ?? []), ...liveFeeHistory].sort((a, b) => a.blockNumber - b.blockNumber);
+          const deposits = base ? [...(base.deposits ?? []), ...freshDeposits] : freshDeposits;
+          const withdrawals = base ? [...(base.withdrawals ?? []), ...freshWithdrawals] : freshWithdrawals;
+          savePoolCache(network, token, { block, fee, deposits, withdrawals, feeHistory });
+          const { positions: exits, feeLegs } = classifyWithdrawals(withdrawals, feeHistory);
+          setState({
+            status: "ready",
+            block,
+            fee,
+            feeHistory,
+            secondsPerBlock,
+            deposits,
+            exits,
+            txBlocks: poolTransactionBlocks(feeLegs),
+            feeLegs: feeLegs.length,
+            withdrawals: withdrawals.length,
+            entryHist: amountHistogram(deposits),
+            exitHist: exits.length > 0 ? amountHistogram(exits) : null,
+            stale: false,
+          });
+          return;
+        }
+
+        // Already at tip for compact snapshots — just go live with snapshot data
+        if (base?.compact) {
+          setState({
+            status: "ready",
+            block,
+            fee,
+            feeHistory: mergedFeeHistory,
+            secondsPerBlock,
+            deposits: null,
+            withdrawals: null,
+            exits: null,
+            entryHist: mergedEntryHist,
+            exitHist: mergedExitHist && mergedExitHist.size > 0 ? mergedExitHist : null,
+            txBlocks: mergedTxBlocks,
+            feeLegs: null,
+            depositsCount: base.depositsCount ?? null,
+            withdrawalsCount: base.withdrawalsCount ?? null,
+            exitsCount: base.exitsCount ?? null,
+            feeLegsCount: base.feeLegsCount ?? null,
+            stale: false,
+          });
+          return;
+        }
+
+        // Fallback: no base — nothing to merge
+        const feeHistory = liveFeeHistory;
         setState({
           status: "ready",
           block,
           fee,
           feeHistory,
           secondsPerBlock,
-          deposits,
-          exits,
-          txBlocks: poolTransactionBlocks(feeLegs),
-          feeLegs: feeLegs.length,
-          withdrawals: withdrawals.length,
-          entryHist: amountHistogram(deposits),
-          exitHist: exits.length > 0 ? amountHistogram(exits) : null,
+          deposits: [],
+          exits: [],
+          txBlocks: [],
+          feeLegs: 0,
+          withdrawals: 0,
+          entryHist: new Map(),
+          exitHist: null,
+          stale: false,
         });
       } catch (e) {
-        if (!cancelled) setState({ status: "error", message: e.message });
+        if (!cancelled) {
+          setState((prev) => (prev.status === "ready" ? { ...prev, stale: false } : { status: "error", message: e.message }));
+        }
       }
     })();
 
@@ -110,18 +279,22 @@ export default function App() {
   }, [network]);
 
   const stats = useMemo(() => {
-    if (state.status !== "ready" || state.deposits.length === 0) return null;
+    if (state.status !== "ready" || (!state.entryHist || state.entryHist.size === 0)) return null;
     const share = (hist) => {
       if (!hist) return null;
       const unique = [...hist.values()].filter((c) => c === 1).length;
       return { amounts: hist.size, unique, pct: (unique / hist.size) * 100 };
     };
+    const deposits = state.deposits?.length ?? state.depositsCount ?? 0;
+    const exits = state.exits?.length ?? state.exitsCount ?? 0;
+    const withdrawals = state.withdrawals?.length ?? state.withdrawalsCount ?? state.withdrawals ?? 0;
+    const feeLegs = state.feeLegs?.length ?? state.feeLegsCount ?? 0;
     return {
-      deposits: state.deposits.length,
-      depositors: new Set(state.deposits.map((d) => d.user)).size,
-      exits: state.exits.length,
-      destinations: new Set(state.exits.map((w) => w.to)).size,
-      feeLegShare: state.withdrawals === 0 ? 0 : (state.feeLegs / state.withdrawals) * 100,
+      deposits,
+      exits,
+      withdrawals,
+      feeLegs,
+      feeLegShare: withdrawals ? (feeLegs / withdrawals) * 100 : 0,
       entry: share(state.entryHist),
       exit: share(state.exitHist),
       popular: popularAmounts(state.entryHist, 8).map((p) =>
@@ -147,7 +320,7 @@ export default function App() {
   }, [state]);
 
   const analysis = useMemo(() => {
-    if (state.status !== "ready" || state.deposits.length === 0) return null;
+    if (state.status !== "ready" || !state.entryHist || state.entryHist.size === 0) return null;
     let position;
     try {
       position = parseUnits(positionText || "0", 18);
@@ -259,6 +432,33 @@ export default function App() {
         {state.status === "error" && (
           <p className="err" style={{ marginTop: 34 }}>
             could not reach the pool — {state.message}
+          </p>
+        )}
+
+        {state.status === "ready" && state.stale && (
+          <p className="status" style={{ marginTop: 18 }}>
+            <span className="dot" style={{ opacity: 0.5 }} />
+            {state.staleSource === "snapshot" ? "from snapshot — updating…" : "from cache — updating…"}
+          </p>
+        )}
+
+        {state.status === "ready" && !state.stale && state.block > 0 && (
+          <p className="status" style={{ marginTop: 8, fontSize: 11 }}>
+            live at block {state.block.toLocaleString()} ·{" "}
+            <button
+              type="button"
+              className="chip"
+              style={{ padding: "4px 8px", fontSize: 10 }}
+              onClick={() => {
+                try {
+                  const k = `rhizome:pool:v2:${network}:${String((cfg[network].tokens?.STRK ?? "").toLowerCase())}`;
+                  window.localStorage.removeItem(k);
+                } catch {}
+                window.location.reload();
+              }}
+            >
+              refresh pool data
+            </button>
           </p>
         )}
 
