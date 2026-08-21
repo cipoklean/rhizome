@@ -3,11 +3,14 @@ import { test } from "node:test";
 import {
   OPERATION,
   buildPrepareInvokeRequest,
+  buildShieldActions,
   buildTrancheActions,
+  canonicalFelt,
   ensureWalletChain,
   resolveChainId,
   sameChain,
   supportsStrk20PrivateDefiVersion,
+  validateStrk20Actions,
 } from "../src/lib/wallet.mjs";
 
 const MAIN = "0x534e5f4d41494e";
@@ -101,6 +104,37 @@ test("a wallet switch exception keeps the useful cause", async () => {
   );
 });
 
+test("Wallet API action felts are canonicalized before reaching Ready", () => {
+  const paddedStrk =
+    "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
+  const canonicalStrk =
+    "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
+  assert.equal(canonicalFelt(paddedStrk), canonicalStrk);
+
+  const shield = buildShieldActions({ token: paddedStrk, amount: 1n });
+  assert.equal(shield[0].token, canonicalStrk);
+
+  const actions = buildTrancheActions({
+    anonymizer: "0x0552",
+    inToken: paddedStrk,
+    outToken: "0x072b",
+    amount: 1n,
+    recipient: "0x030c",
+  });
+  assert.equal(actions[0].token, "0x72b");
+  assert.equal(actions[0].recipient, "0x30c");
+  assert.equal(actions[1].contract, "0x552");
+  assert.equal(actions[1].calldata[1], canonicalStrk);
+  assert.deepEqual(validateStrk20Actions(actions), []);
+});
+
+test("local validation identifies a non-canonical felt by field", () => {
+  const errors = validateStrk20Actions([
+    { type: "deposit", token: "0x0471", amount: "0x1" },
+  ]);
+  assert.deepEqual(errors, ["actions[0].token must be a canonical Wallet API FELT"]);
+  assert.throws(() => canonicalFelt(`0x1${"0".repeat(63)}`), /exceeds 63 hex digits/);
+});
 
 test("the documented vault dry run opens an output note then invokes", () => {
   const actions = buildTrancheActions({
