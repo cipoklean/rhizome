@@ -511,7 +511,7 @@ export default function ExecutePanel({
         </div>
 
         {/* STEP 3 */}
-        <div className={`wizard-step ${!ready ? "" : !feePlan ? "" : step3Done ? "done" : "active"}`}>
+        <div className={`wizard-step ${!ready || !schedule?.length ? "" : step3Done ? "done" : "active"}`}>
           <div className="badge">{step3Done ? "✓" : "3"}</div>
           <div>
             <h4>Free test — no fee, no transaction</h4>
