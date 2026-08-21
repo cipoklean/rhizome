@@ -127,7 +127,7 @@ export default function ExecutePanel({
       cancelled = true;
       clearInterval(id);
     };
-  }, [net]);
+  }, [net.rpc]);
 
   async function discover() {
     setBusy("discover");
