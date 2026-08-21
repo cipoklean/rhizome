@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildCompactPayload } from "../src/lib/pool-compact.mjs";
 import {
   connect,
   fetchDeposits,
@@ -59,8 +60,13 @@ for (const network of targets) {
   mkdirSync(dir, { recursive: true });
   const out = join(dir, `pool-snapshot.${network}.json`);
   writeFileSync(out, JSON.stringify(payload));
-  // also emit a pretty copy for humans/CI diff
-  writeFileSync(join(dir, `pool-snapshot.${network}.pretty.json`), JSON.stringify(payload, null, 2));
-  console.log(`[${network}] wrote ${out}  (${(JSON.stringify(payload).length / 1024).toFixed(0)} kB)`);
+  const rawBytes = JSON.stringify(payload).length;
+  console.log(`[${network}] wrote ${out}  (${(rawBytes / 1024).toFixed(0)} kB)`);
+
+  // Also emit the compact file via the shared helper — single source of truth
+  const compact = buildCompactPayload({ network, block, pool: net.strk20Pool, token, fee, feeHistory, deposits, withdrawals, generatedAt: payload.generatedAt });
+  const compactOut = join(dir, `pool-state.${network}.json`);
+  writeFileSync(compactOut, JSON.stringify(compact));
+  console.log(`[${network}] wrote ${compactOut}  (${(JSON.stringify(compact).length / 1024).toFixed(0)} kB compact via pool-compact.mjs)`);
 }
-console.log("\ndone.");
+console.log("\ndone — run `git add public/pool-state.<network>.json` before mainnet deploy.");
