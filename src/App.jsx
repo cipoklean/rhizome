@@ -225,14 +225,30 @@ export default function App() {
         <p className="eyebrow">
           <b>◢</b> STRK20 PRIVATE SPRINT · RHIZOME
         </p>
-        <h1>Privacy has a price. Rhizome measures it.</h1>
+        <h1>Private yield without leaving a fingerprint.</h1>
         <p className="sub">
-          The STRK20 pool hides who paid whom. It does not hide the amounts on the public legs — and
-          on mainnet, most of those amounts are unique enough to identify you, going in and coming
-          out. Rhizome reads the live fee and every public deposit and withdrawal, prices what
-          unlinkability actually costs, and refuses to recommend it when it isn&apos;t worth paying
-          for.
+          The privacy pool hides <b>who</b> you are. It can&apos;t hide{" "}
+          <b>how much</b> you moved — and on mainnet, most amounts are unique enough to trace. Rhizome
+          finds amounts that blend in, prices the fee to get there, and runs the trade.
         </p>
+
+        <div className="how">
+          <span className="how-step">
+            <b>1</b> Pick a popular amount
+          </span>
+          <span className="how-arrow">→</span>
+          <span className="how-step">
+            <b>2</b> Split privately
+          </span>
+          <span className="how-arrow">→</span>
+          <span className="how-step">
+            <b>3</b> Wait a little
+          </span>
+          <span className="how-arrow">→</span>
+          <span className="how-step">
+            <b>4</b> Enter the vault
+          </span>
+        </div>
 
         {state.status === "loading" && (
           <p className="status" style={{ marginTop: 34 }}>
@@ -249,17 +265,15 @@ export default function App() {
         {state.status === "ready" && (
           <div className="strip">
             <div className="cell">
-              <div className="k">Fee / pool transaction</div>
+              <div className="k">Fee per step</div>
               <div className="v">
                 {strk(state.fee)}
                 <small>STRK</small>
               </div>
-              <div className="note">
-                charged per <span className="mono">apply_actions</span> call, always in STRK
-              </div>
+              <div className="note">flat — same no matter the size</div>
             </div>
             <div className="cell">
-              <div className="k">Public legs read</div>
+              <div className="k">Past moves checked</div>
               <div className="v">
                 {stats ? (stats.deposits + stats.exits).toLocaleString() : "—"}
               </div>
@@ -269,26 +283,26 @@ export default function App() {
               </div>
             </div>
             <div className="cell">
-              <div className="k">Entry amounts that are fingerprints</div>
+              <div className="k">Amounts used only once</div>
               <div className="v">
                 {stats?.entry ? stats.entry.pct.toFixed(1) : "—"}
                 <small>%</small>
               </div>
               <div className="note">
                 {stats?.entry
-                  ? `${stats.entry.unique.toLocaleString()} of ${stats.entry.amounts.toLocaleString()} used once`
+                  ? `${stats.entry.unique.toLocaleString()} of ${stats.entry.amounts.toLocaleString()} amounts are unique — easy to trace`
                   : ""}
               </div>
             </div>
             <div className="cell">
-              <div className="k">Exit amounts that are fingerprints</div>
+              <div className="k">On the way out too</div>
               <div className="v">
                 {stats?.exit ? stats.exit.pct.toFixed(1) : "—"}
                 <small>%</small>
               </div>
               <div className="note">
                 {stats?.exit
-                  ? `${stats.exit.unique.toLocaleString()} of ${stats.exit.amounts.toLocaleString()} used once`
+                  ? `${stats.exit.unique.toLocaleString()} of ${stats.exit.amounts.toLocaleString()} exit amounts are unique`
                   : "no exit data for this token"}
               </div>
             </div>
@@ -298,47 +312,49 @@ export default function App() {
 
       <section className="band">
         <p className="eyebrow">
-          <b>◢</b> THE LEAK
+          <b>◢</b> WHY THIS MATTERS
         </p>
         <h2>The pool hides who. Not how much.</h2>
         <p className="lede">
-          Shielding and withdrawing are public ERC-20 legs: address, token, amount. Movement inside
-          the pool is private, but an amount nobody else has ever used survives that and reappears on
-          the way out. Rhizome only ever reads this public side — it never touches a viewing key.
+          Imagine the pool is a dark room. Everyone&apos;s deposits go in and withdrawals come out — but
+          the amounts written on the door are still visible. If yours is the only <b>1,234.567</b>{" "}
+          STRK in the room, it&apos;s you.{" "}
+          <span className="mono" style={{ color: "var(--dim)", fontSize: 13 }}>
+            Rhizome only reads that public door — never your private keys.
+          </span>
         </p>
 
         <div className="cards">
           <div className="card">
             <div className="num">01</div>
-            <h3>Your amount is the leak</h3>
+            <h3>Your amount can give you away</h3>
             <p>
-              Deposits publish the depositor, the token and the exact amount. Withdrawals publish the
-              destination and the amount. Pick a number nobody else has used and the pool cannot help
-              you.
+              Every deposit and withdrawal is public: who, which token, exact amount. A rare amount is
+              a fingerprint the pool can&apos;t erase.
             </p>
           </div>
           <div className="card">
             <div className="num">02</div>
-            <h3>Cover is not symmetric</h3>
+            <h3>In ≠ out</h3>
             <p>
-              An amount can have hundreds of deposits behind it and almost no withdrawals. Scoring
-              only the way in rates those amounts safest, right up to the moment you try to leave.
+              An amount can be common going in and rare going out. Rhizome checks both — the weaker
+              side decides your safety.
             </p>
           </div>
           <div className="card">
             <div className="num">03</div>
-            <h3>Splitting costs real money</h3>
+            <h3>Privacy has a fee</h3>
             <p>
-              The fee is charged per pool transaction, and keeping a deposit unlinked from the venue
-              action it funds takes two of them. So every leg is two fees in, two more back out.
+              Each step costs a flat fee (now 6 STRK). To keep two steps unlinkable you pay it twice.
+              Splitting a small position can cost more than it protects.
             </p>
           </div>
           <div className="card">
             <div className="num">04</div>
-            <h3>So the answer is often no</h3>
+            <h3>Sometimes the answer is &ldquo;don&apos;t&rdquo;</h3>
             <p>
-              Below a certain size the fee outruns the benefit. Rhizome will tell you to leave it
-              alone rather than sell you a schedule.
+              If the fee eats your position, Rhizome says so — instead of selling you a schedule that
+              isn&apos;t worth it.
             </p>
           </div>
         </div>
@@ -347,18 +363,18 @@ export default function App() {
       {stats && (
         <section className="band">
           <p className="eyebrow">
-            <b>◢</b> COHORTS
+            <b>◢</b> WHAT HIDES YOU
           </p>
-          <h2>Where the cover actually is.</h2>
+          <h2>Popular amounts are your camouflage.</h2>
           <p className="lede">
-            A cohort is how many other legs carry the exact same amount. These are the denominations
-            the pool has grown organically — shown for both legs, because cover on the way in is not
-            cover on the way out. Rhizome scores every amount on its weaker side.
+            A <b>cohort</b> = how many other people used the exact same amount. Bigger cohort = harder
+            to single you out. Rhizome scores every amount on its <b>weaker side</b> (whichever is
+            smaller — going in or coming out). The two bars show the difference.
             {stats.feeLegShare > 0 && (
               <>
                 {" "}
-                Fee reimbursement is excluded: the pool repays its own fee with an extra withdraw leg,
-                which accounts for {stats.feeLegShare.toFixed(1)}% of all public withdrawals.
+                Fee reimbursements ({stats.feeLegShare.toFixed(1)}% of withdrawals) are excluded — they
+                would fake a huge cohort at exactly 6 STRK.
               </>
             )}
           </p>
@@ -392,26 +408,26 @@ export default function App() {
             ))}
           </div>
           <div className="bar-legend">
-            <span>▬ entry cohort (deposits)</span>
-            <span>▭ exit cohort (withdrawals)</span>
-            <span>scored on the weaker side</span>
+            <span>▬ going in (darker = more popular)</span>
+            <span>▭ coming out</span>
+            <span>number = others with same amount</span>
           </div>
         </section>
       )}
 
       <section className="band">
         <p className="eyebrow">
-          <b>◢</b> THE FRONTIER
+          <b>◢</b> YOUR PLAN
         </p>
-        <h2>What cover costs, priced.</h2>
+        <h2>How much to split — and what it costs.</h2>
         <p className="lede">
-          Enter a position. Rhizome builds schedules out of amounts that already have cover on both
-          legs, prices each one at the live fee, and marks the schedule it would actually run.
+          Enter your total STRK. Rhizome finds a way to split it into popular amounts, prices the fee,
+          and picks the cheapest split worth doing.
         </p>
 
         <div className="controls">
           <label className="field">
-            Position (STRK)
+            Your amount (STRK)
             <input
               type="text"
               inputMode="decimal"
@@ -424,17 +440,7 @@ export default function App() {
             Network
             <select value={network} onChange={(e) => setNetwork(e.target.value)}>
               <option value="mainnet">mainnet</option>
-              <option value="sepolia">sepolia</option>
-            </select>
-          </label>
-          <label className="field">
-            Fee model
-            <select value={feeModel} onChange={(e) => setFeeModel(e.target.value)}>
-              {Object.entries(FEE_MODELS).map(([key, m]) => (
-                <option key={key} value={key}>
-                  {m.txPerLeg}× — {m.label}
-                </option>
-              ))}
+              <option value="sepolia">sepolia — free test run</option>
             </select>
           </label>
           <div className="chips">
@@ -452,15 +458,27 @@ export default function App() {
           </div>
         </div>
 
-        <p className="status" style={{ marginTop: 16 }}>
-          {FEE_MODELS[feeModel].note}
-        </p>
+        <details className="advanced">
+          <summary>Advanced: fee model — which costs are shown</summary>
+          <label className="field" style={{ marginTop: 14 }}>
+            Fee model
+            <select value={feeModel} onChange={(e) => setFeeModel(e.target.value)}>
+              {Object.entries(FEE_MODELS).map(([key, m]) => (
+                <option key={key} value={key}>
+                  {m.txPerLeg}× — {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="status" style={{ marginTop: 10 }}>
+            {FEE_MODELS[feeModel].note}
+          </p>
+        </details>
 
         {network !== "mainnet" && (
-          <p className="status" style={{ marginTop: 10, color: "var(--orange)" }}>
-            Sepolia is the right place to dry-run execution and the wrong place to measure cover: a
-            different fee, a fraction of the traffic, and testnet amounts that nobody chose for
-            privacy. Read the frontier on mainnet, then rehearse the schedule here.
+          <p className="status" style={{ marginTop: 12, color: "var(--orange)" }}>
+            Sepolia is for free practice — different fee, tiny traffic, fake amounts. Read the real
+            plan on mainnet, then rehearse it here.
           </p>
         )}
 
@@ -476,66 +494,32 @@ export default function App() {
               <p>{VERDICTS[analysis.rec.verdict]?.body}</p>
               <div className="facts">
                 <span className="tag hot">
-                  {analysis.rec.tranches} leg{analysis.rec.tranches === 1 ? "" : "s"}
+                  {analysis.rec.tranches === 1 ? "1 piece" : `${analysis.rec.tranches} pieces`}
                 </span>
-                <span className="tag">{analysis.rec.poolTransactions} pool transactions</span>
-                <span className="tag">{strk(analysis.rec.feeCost)} STRK in fees</span>
+                <span className="tag">fee {strk(analysis.rec.feeCost)} STRK</span>
                 <span className="tag">
-                  {(analysis.rec.feeCostRatio * 100).toFixed(2)}% of position
+                  {(analysis.rec.feeCostRatio * 100).toFixed(2)}% of your amount
                 </span>
-                <span className="tag">weakest cohort {analysis.rec.minCohort}</span>
                 <span className="tag">
-                  round trip {strk(analysis.rec.roundTripFeeCost)} STRK (
-                  {(analysis.rec.roundTripFeeCostRatio * 100).toFixed(2)}%)
+                  hides among {analysis.rec.minCohort} others at weakest
                 </span>
               </div>
+              <p className="status" style={{ marginTop: 12 }}>
+                Round trip (in + out): {strk(analysis.rec.roundTripFeeCost)} STRK (
+                {(analysis.rec.roundTripFeeCostRatio * 100).toFixed(2)}%).
+              </p>
             </div>
 
             <FrontierChart rows={analysis.rows} chosen={analysis.rec.tranches} />
-
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Legs</th>
-                    <th>Pool tx</th>
-                    <th>Fee cost</th>
-                    <th>% of position</th>
-                    <th>Entry cohort</th>
-                    <th>Exit cohort</th>
-                    <th>Weaker side</th>
-                    <th>Fully covered</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analysis.rows.map((r) => (
-                    <tr
-                      key={r.tranches}
-                      className={r.tranches === analysis.rec.tranches ? "chosen" : ""}
-                    >
-                      <td>{r.tranches}</td>
-                      <td>{r.poolTransactions}</td>
-                      <td>{strk(r.feeCost)}</td>
-                      <td>{(r.feeCostRatio * 100).toFixed(2)}%</td>
-                      <td>{r.minEntryCohort}</td>
-                      <td>{r.exitKnown ? r.minExitCohort : "?"}</td>
-                      <td>{r.minCohort}</td>
-                      <td>{r.allCovered ? "yes" : "no"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
 
             {analysis.rec.tranches > 1 && (
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>Leg</th>
+                      <th>Piece</th>
                       <th>Amount</th>
-                      <th>Entry cohort</th>
-                      <th>Exit cohort</th>
+                      <th>Hides among (in / out)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -543,10 +527,9 @@ export default function App() {
                       <tr key={i}>
                         <td>{i + 1}</td>
                         <td>{strk(leg.amount)} STRK</td>
-                        <td>{leg.entryCohort}</td>
                         <td>
-                          {leg.exitKnown ? leg.exitCohort : "?"}
-                          {!leg.covered && <span className="pill">no cover</span>}
+                          {leg.entryCohort} / {leg.exitKnown ? leg.exitCohort : "?"}
+                          {!leg.covered && <span className="pill">rare — easier to trace</span>}
                         </td>
                       </tr>
                     ))}
@@ -554,6 +537,39 @@ export default function App() {
                 </table>
               </div>
             )}
+
+            <details className="advanced" style={{ marginTop: 22 }}>
+              <summary>Show full comparison table</summary>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Pieces</th>
+                      <th>Steps</th>
+                      <th>Fee</th>
+                      <th>% of amount</th>
+                      <th>Weakest cohort</th>
+                      <th>All common?</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analysis.rows.map((r) => (
+                      <tr
+                        key={r.tranches}
+                        className={r.tranches === analysis.rec.tranches ? "chosen" : ""}
+                      >
+                        <td>{r.tranches}</td>
+                        <td>{r.poolTransactions}</td>
+                        <td>{strk(r.feeCost)}</td>
+                        <td>{(r.feeCostRatio * 100).toFixed(2)}%</td>
+                        <td>{r.minCohort}</td>
+                        <td>{r.allCovered ? "yes" : "no"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
           </>
         )}
       </section>
@@ -563,66 +579,66 @@ export default function App() {
           <p className="eyebrow">
             <b>◢</b> TIMING
           </p>
-          <h2>The cover that costs nothing.</h2>
+          <h2>Waiting is free — when others are moving.</h2>
           <p className="lede">
-            Amount cover is bought with fees. Timing cover is bought by waiting, and waiting is free
-            — but only if somebody else transacts while you wait. Shielding in a separate transaction
-            is what stops an observer tying your deposit to the venue action it funds, and that
-            separation is worthless if you are the only pool transaction in the window.{" "}
-            {timing.total.toLocaleString()} pool transactions in the pool&apos;s history,{" "}
-            {timing.recent.toLocaleString()} in the last {TIMING_SAMPLE_BLOCKS.toLocaleString()}{" "}
-            blocks ({formatDelay(TIMING_SAMPLE_BLOCKS, state.secondsPerBlock)}). Judged on the recent
-            window only — an old burst is not cover for a transaction sent today.
+            Splitting hides the <b>amount</b>. Waiting hides the <b>timing</b> — it only works if
+            someone else uses the pool while you wait. We checked the last{" "}
+            {TIMING_SAMPLE_BLOCKS.toLocaleString()} blocks (~{formatDelay(TIMING_SAMPLE_BLOCKS, state.secondsPerBlock)}).
+            The pool has {timing.total.toLocaleString()} moves ever, {timing.recent.toLocaleString()}{" "}
+            recently — old bursts don&apos;t count for today.
           </p>
 
           <div className={`verdict ${timing.rec.verdict}`}>
             <h3>
               {timing.rec.verdict === "delay-earns-it"
-                ? `Wait ${timing.rec.window.toLocaleString()} blocks between the two legs.`
-                : "This pool is too quiet for timing cover."}
+                ? `Wait about ${formatDelay(timing.rec.window, state.secondsPerBlock)} between hiding and entering the vault.`
+                : "This pool is quiet — timing won&apos;t hide you much right now."}
             </h3>
             <p>
               {timing.rec.verdict === "delay-earns-it"
-                ? `That is ${formatDelay(timing.rec.window, state.secondsPerBlock)}, and it costs nothing but patience. In a window that wide the median pool transaction has ${timing.rec.medianCohort} others for company, and is alone only ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time.`
-                : `Even at ${timing.rec.window.toLocaleString()} blocks (${formatDelay(timing.rec.window, state.secondsPerBlock)}) a transaction is alone ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time. Wait as long as you can bear, and know the delay is doing less work here than the amounts are.`}
+                ? `That&apos;s ${timing.rec.window.toLocaleString()} blocks. At that wait, a move usually has ${timing.rec.medianCohort} others nearby, alone only ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time.`
+                : `Even waiting ${formatDelay(timing.rec.window, state.secondsPerBlock)} leaves you alone ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time — the amount split is doing more work than the wait.`}
               {timing.floor && (
                 <>
                   {" "}
-                  At the {NOTE_MATURITY_BLOCKS}-block note maturity floor you are alone{" "}
-                  <b>{(timing.floor.aloneShare * 100).toFixed(0)}%</b> of the time — so shielding
-                  separately and then invoking immediately spends an extra fee for almost nothing.
+                  At the minimum {NOTE_MATURITY_BLOCKS} blocks you&apos;re alone{" "}
+                  <b>{(timing.floor.aloneShare * 100).toFixed(0)}%</b> — paying the extra fee to split
+                  and then going immediately buys almost nothing.
                 </>
               )}
             </p>
           </div>
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Delay</th>
-                  <th>Wait</th>
-                  <th>Other pool tx (median)</th>
-                  <th>Alone</th>
-                </tr>
-              </thead>
-              <tbody>
-                {timing.rows.map((r) => (
-                  <tr key={r.window} className={r.window === timing.rec.window ? "chosen" : ""}>
-                    <td>
-                      {r.window.toLocaleString()} blocks
-                      {r.window === NOTE_MATURITY_BLOCKS && (
-                        <span className="pill">maturity floor</span>
-                      )}
-                    </td>
-                    <td>{formatDelay(r.window, state.secondsPerBlock)}</td>
-                    <td>{r.medianCohort}</td>
-                    <td>{(r.aloneShare * 100).toFixed(0)}%</td>
+          <details className="advanced" style={{ marginTop: 18 }}>
+            <summary>Show timing table</summary>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Wait</th>
+                    <th>~Time</th>
+                    <th>Others nearby (median)</th>
+                    <th>Alone</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {timing.rows.map((r) => (
+                    <tr key={r.window} className={r.window === timing.rec.window ? "chosen" : ""}>
+                      <td>
+                        {r.window.toLocaleString()} blocks
+                        {r.window === NOTE_MATURITY_BLOCKS && (
+                          <span className="pill">minimum</span>
+                        )}
+                      </td>
+                      <td>{formatDelay(r.window, state.secondsPerBlock)}</td>
+                      <td>{r.medianCohort}</td>
+                      <td>{(r.aloneShare * 100).toFixed(0)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </section>
       )}
 
@@ -646,11 +662,10 @@ export default function App() {
       />
 
       <footer>
-        <div className="meta">Honest accounting · reads public state only · no viewing key</div>
-        Deposits, withdrawals, timing and open-note amounts are public by design. Rhizome claims
-        reduced correlatability on the public legs — not amount privacy, which the pool does not
-        provide and no scheduling strategy can create.{" "}
-        <a href="https://github.com/cipoklean/rhizome">Source</a> ·{" "}
+        <div className="meta">Rhizome reads only public pool data — never your private keys.</div>
+        Your amounts and timing on the public door are visible by design. Rhizome makes the{" "}
+        fingerprint harder to match — it can&apos;t make the amount itself private, because the pool
+        doesn&apos;t. <a href="https://github.com/cipoklean/rhizome">Source</a> ·{" "}
         <a href="https://strk20.starknet.io/hackathon">STRK20 Private Sprint</a>
       </footer>
     </div>

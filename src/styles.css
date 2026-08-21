@@ -626,3 +626,132 @@ footer .meta {
     border-bottom: 1px solid var(--line);
   }
 }
+
+/* ---------- how ribbon ---------- */
+
+.how {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 28px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.how-step b {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  border-radius: 999px;
+  background: var(--orange);
+  color: #fff;
+  font-size: 11px;
+  margin-right: 6px;
+}
+
+.how-arrow {
+  color: var(--ghost);
+}
+
+/* ---------- advanced disclosure ---------- */
+
+.advanced {
+  margin-top: 18px;
+  border: 1px dashed var(--line);
+  padding: 14px 16px;
+  background: rgba(250, 250, 250, 0.02);
+}
+
+.advanced summary {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  cursor: pointer;
+  list-style: none;
+}
+
+.advanced summary::before {
+  content: "▸ ";
+  color: var(--orange);
+}
+
+.advanced[open] summary::before {
+  content: "▾ ";
+}
+
+/* ---------- wizard ---------- */
+
+.wizard {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  margin-top: 22px;
+}
+
+.wizard-step {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 16px;
+  padding: 18px 18px 18px 16px;
+  background: var(--bg-1);
+}
+
+.wizard-step.done {
+  background: linear-gradient(180deg, rgba(197, 52, 0, 0.06), transparent 70%), var(--bg-1);
+}
+
+.wizard-step .badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid var(--line);
+  color: var(--faint);
+  background: #0a0a0a;
+  flex-shrink: 0;
+}
+
+.wizard-step.active .badge {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: #fff;
+}
+
+.wizard-step.done .badge {
+  background: #1a0a04;
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.wizard-step h4 {
+  font-family: var(--body);
+  font-size: 15px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  margin: 0 0 4px;
+}
+
+.wizard-step p {
+  font-size: 13.5px;
+  color: var(--dim);
+  margin: 0 0 10px;
+}
+
+.wizard-step p strong {
+  color: var(--text);
+  font-weight: 600;
+}
