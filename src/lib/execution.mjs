@@ -132,3 +132,91 @@ export function buildRehearsalFallback({ amount, feeAmount, score = {} }) {
   if (value <= fee * 2n) return [];
   return [{ ...score, amount: value, covered: false, rehearsal: true }];
 }
+
+
+/**
+ * Derive the STRK reserve required to keep every analyzed public amount intact.
+ *
+ * Upstream `privacy.cairo` runs `collect_fee()` before `_apply_actions()`: the
+ * fee router fronts each fee and is reimbursed by a fee-sized pool withdrawal.
+ * Client action phases put Deposit before Withdrawal, so a dedicated bootstrap
+ * deposit can reimburse its own fee. Depositing `shortfall + fee` therefore
+ * leaves exactly `shortfall` additional shielded STRK.
+ *
+ * Without a separate reserve, one fresh isolated entry leg can move only
+ * `amount - 2 * fee` into the vault. That changes the public withdrawal amount
+ * the cohort analysis scored, so Rhizome must fail closed rather than silently
+ * haircut it.
+ */
+export function buildFeeReservePlan({ schedule, feeAmount, shieldedStrkBalance } = {}) {
+  if (!Array.isArray(schedule) || schedule.length === 0) {
+    throw new Error("fee planning requires at least one schedule leg");
+  }
+
+  let fee;
+  try {
+    fee = BigInt(feeAmount);
+  } catch {
+    throw new Error("fee amount must be an integer");
+  }
+  if (fee < 0n) throw new Error("fee amount cannot be negative");
+
+  const legAmounts = schedule.map((leg, index) => {
+    try {
+      const amount = BigInt(leg?.amount);
+      if (amount <= 0n) throw new Error();
+      return amount;
+    } catch {
+      throw new Error(`schedule leg ${index + 1} must have a positive integer amount`);
+    }
+  });
+
+  const transactionsPerLeg = 2;
+  const legCount = legAmounts.length;
+  const executionTransactions = legCount * transactionsPerLeg;
+  const requiredReserve = fee * BigInt(executionTransactions);
+  const balanceKnown = shieldedStrkBalance !== undefined && shieldedStrkBalance !== null;
+  let existingReserve = 0n;
+  if (balanceKnown) {
+    try {
+      existingReserve = BigInt(shieldedStrkBalance);
+    } catch {
+      throw new Error("shielded STRK balance must be an integer");
+    }
+    if (existingReserve < 0n) throw new Error("shielded STRK balance cannot be negative");
+  }
+
+  const reserveShortfall =
+    existingReserve >= requiredReserve ? 0n : requiredReserve - existingReserve;
+  const bootstrapFee = reserveShortfall > 0n ? fee : 0n;
+  const bootstrapDeposit = reserveShortfall > 0n ? reserveShortfall + bootstrapFee : 0n;
+  const freshBootstrapFee = requiredReserve > 0n ? fee : 0n;
+  const freshBootstrapDeposit = requiredReserve + freshBootstrapFee;
+  const reserveVerified = requiredReserve === 0n || (balanceKnown && reserveShortfall === 0n);
+
+  return {
+    legCount,
+    feePerTransaction: fee,
+    transactionsPerLeg,
+    executionTransactions,
+    executionFees: requiredReserve,
+    requiredReserve,
+    balanceKnown,
+    existingReserve,
+    reserveShortfall,
+    bootstrapFee,
+    bootstrapDeposit,
+    freshBootstrapFee,
+    freshBootstrapDeposit,
+    totalFeesWithBootstrap: requiredReserve + bootstrapFee,
+    legAmounts,
+    vaultAmounts: [...legAmounts],
+    withoutReserveVaultAmounts: legAmounts.map((amount) => {
+      const net = amount - fee * BigInt(transactionsPerLeg);
+      return net > 0n ? net : 0n;
+    }),
+    preservesCohorts: true,
+    reserveVerified,
+    paidSubmissionAllowed: reserveVerified,
+  };
+}

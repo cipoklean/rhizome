@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   acceptedReceiptBlock,
+  buildFeeReservePlan,
   executionProgressKey,
   readExecutionProgress,
   writeExecutionProgress,
 } from "./lib/execution.mjs";
 import { connect } from "./lib/pool.mjs";
-import { FEE_MODELS } from "./lib/frontier.mjs";
 import { NOTE_MATURITY_BLOCKS, formatDelay } from "./lib/timing.mjs";
 import { formatUnits, parseUnits } from "./lib/units.mjs";
 import {
@@ -47,10 +47,10 @@ export default function ExecutePanel({
   schedule,
   scheduleSource,
   paidSubmissionAllowed,
+  paidSubmissionReason,
   analysisError,
   token,
   fee,
-  feeModel,
   delay,
   secondsPerBlock,
 }) {
@@ -59,9 +59,8 @@ export default function ExecutePanel({
   const [account, setAccount] = useState(null);
   const [support, setSupport] = useState(null);
   const [balances, setBalances] = useState(null);
-  const [shape, setShape] = useState("implicit");
   const [directVaultAmount, setDirectVaultAmount] = useState("1");
-  const [directVaultPassed, setDirectVaultPassed] = useState(null);
+  const [directVaultPassed, setDirectVaultPassed] = useState(false);
   const [directVaultAttempt, setDirectVaultAttempt] = useState(null);
   const [busy, setBusy] = useState(null);
   const [log, setLog] = useState([]);
@@ -74,13 +73,45 @@ export default function ExecutePanel({
 
   const anonymizer = net.anonymizer;
   const vToken = net.vesu?.vTokens?.STRK ?? null;
-  const txPerLeg = FEE_MODELS[feeModel]?.txPerLeg ?? 1;
   const measuredDelayBlocks = Math.max(
     NOTE_MATURITY_BLOCKS,
     delay?.window ?? NOTE_MATURITY_BLOCKS,
   );
   // Mainnet never exposes the shortcut. On Sepolia it is a rehearsal of the
   // action path, not a claim of timing cover.
+
+
+  const shieldedStrkBalance = useMemo(() => {
+    if (!Array.isArray(balances)) return null;
+    try {
+      const target = BigInt(token);
+      const entry = balances.find((balance) => {
+        try {
+          return BigInt(balance?.token ?? balance?.[0]) === target;
+        } catch {
+          return false;
+        }
+      });
+      return entry ? BigInt(entry.balance ?? entry[1] ?? 0) : 0n;
+    } catch {
+      return null;
+    }
+  }, [balances, token]);
+
+  const feePlan = useMemo(() => {
+    if (!schedule?.length || fee === null || fee === undefined) return null;
+    return buildFeeReservePlan({
+      schedule,
+      feeAmount: fee,
+      shieldedStrkBalance,
+    });
+  }, [schedule, fee, shieldedStrkBalance]);
+
+  // Analysis eligibility is necessary but never sufficient. Paid submission is
+  // unlocked only when Ready has shared a balance that covers every remaining
+  // shield and vault fee without changing the scheduled public amounts.
+  const paidGateOpen = Boolean(paidSubmissionAllowed && feePlan?.paidSubmissionAllowed);
+
   const isRehearsal = network === "sepolia" && delayMode === "rehearsal";
   const delayBlocks = isRehearsal ? NOTE_MATURITY_BLOCKS : measuredDelayBlocks;
 
@@ -207,7 +238,7 @@ export default function ExecutePanel({
         setBalances(b);
         say("Read shielded balances through the wallet.");
       } catch (e) {
-        say(`Shielded balances not shared: ${e.message}. Execution is still available.`, "info");
+        say(`Shielded balances not shared: ${e.message}. Free dry runs remain available; paid execution stays locked.`, "info");
       }
     } catch (e) {
       const labels = {
@@ -224,7 +255,7 @@ export default function ExecutePanel({
 
   const shieldActionsFor = (leg) => buildShieldActions({ token, amount: leg.amount });
 
-  const investActionsFor = (leg, selectedShape = shape) =>
+  const investActionsFor = (leg) =>
     buildTrancheActions({
       anonymizer,
       inToken: token,
@@ -232,7 +263,6 @@ export default function ExecutePanel({
       amount: leg.amount,
       recipient: account?.address ?? "0x0",
       operation: OPERATION.Deposit,
-      shape: selectedShape,
     });
 
   const patch = (i, fields) => setLegs((l) => ({ ...l, [i]: { ...(l[i] ?? {}), ...fields } }));
@@ -273,29 +303,25 @@ export default function ExecutePanel({
    * conservation during proving, so the account needs the requested amount plus
    * enough shielded STRK for the fee.
    */
-  async function dryRunExistingVault(selectedShape) {
+  async function dryRunExistingVault() {
     if (!account || !deployed) return;
-    setShape(selectedShape);
-    setBusy(`dryrun-existing-vault-${selectedShape}`);
-    setDirectVaultPassed(null);
+    setBusy("dryrun-existing-vault");
+    setDirectVaultPassed(false);
     try {
       const amount = parseUnits(directVaultAmount, 18);
       if (amount <= 0n) throw new Error("enter a vault amount above zero");
-      const actions = investActionsFor({ amount }, selectedShape);
-      setDirectVaultAttempt({
-        shape: selectedShape,
-        request: buildPrepareInvokeRequest(actions),
-      });
+      const actions = investActionsFor({ amount });
+      setDirectVaultAttempt({ request: buildPrepareInvokeRequest(actions) });
       await requireSelectedChain();
       await dryRun(account, actions);
-      setDirectVaultPassed(selectedShape);
+      setDirectVaultPassed(true);
       say(
-        `Direct vault dry run passed (${selectedShape}, ${strk(amount)} STRK from existing shielded funds). No transaction sent.`,
+        `Direct vault dry run passed (transfer OPEN + invoke, ${strk(amount)} STRK from existing shielded funds). No transaction sent.`,
         "ok",
       );
     } catch (e) {
-      setDirectVaultPassed(null);
-      say(`Direct vault dry run rejected (${selectedShape}): ${e.message}`, "err");
+      setDirectVaultPassed(false);
+      say(`Direct vault dry run rejected: ${e.message}`, "err");
     } finally {
       setBusy(null);
     }
@@ -315,7 +341,7 @@ export default function ExecutePanel({
 
   /** Stage 1: the public deposit leg — the amount the analysis chose. */
   async function shield(i) {
-    if (!account || !shieldDryRun || !paidSubmissionAllowed) return;
+    if (!account || !shieldDryRun || !paidGateOpen) return;
     setBusy(`shield-${i}`);
     patch(i, { stage: "shielding" });
     try {
@@ -375,10 +401,10 @@ export default function ExecutePanel({
       await requireSelectedChain();
       await dryRun(account, investActionsFor(schedule[i]));
       patch(i, { investDryRun: true });
-      say(`Leg ${i + 1} vault dry run passed (${shape}).`, "ok");
+      say(`Leg ${i + 1} vault dry run passed (transfer OPEN + invoke).`, "ok");
     } catch (e) {
       patch(i, { investDryRun: false });
-      say(`Leg ${i + 1} vault dry run rejected (${shape}): ${e.message}`, "err");
+      say(`Leg ${i + 1} vault dry run rejected: ${e.message}`, "err");
     } finally {
       setBusy(null);
     }
@@ -394,7 +420,7 @@ export default function ExecutePanel({
   }
 
   async function invest(i) {
-    if (!account || !legs[i]?.investDryRun) return;
+    if (!account || !legs[i]?.investDryRun || !paidGateOpen) return;
     setBusy(`invest-${i}`);
     try {
       await requireSelectedChain();
@@ -438,6 +464,18 @@ export default function ExecutePanel({
   }
 
   const strk = (v) => formatUnits(v, 18, { maxFractionDigits: 4 });
+
+  const scheduledAmount = feePlan?.legAmounts.reduce((sum, amount) => sum + amount, 0n) ?? 0n;
+  const paidGateReason = !paidSubmissionAllowed
+    ? paidSubmissionReason ?? "Paid submission is disabled for this schedule."
+    : !feePlan
+      ? "The live pool fee is unavailable, so fee reserve cannot be verified."
+      : !feePlan.balanceKnown
+        ? "Share the shielded STRK balance through Ready to verify the complete fee reserve."
+        : feePlan.reserveShortfall > 0n
+          ? `Shielded STRK is ${strk(feePlan.reserveShortfall)} short. A separate bootstrap deposit would need ${strk(feePlan.bootstrapDeposit)} STRK gross (${strk(feePlan.reserveShortfall)} reserve + ${strk(feePlan.bootstrapFee)} fee).`
+          : null;
+
   const ready = Boolean(account && support?.supported);
   const deployed = Boolean(anonymizer && vToken);
 
@@ -481,12 +519,11 @@ export default function ExecutePanel({
         <b>shield the chosen amount</b>, wait, then <b>move it into the vault</b> — because the pool
         fee is charged per <span className="mono">apply_actions</span> call and the gap between the
         two is what stops an observer pairing them.
-        {fee && schedule?.length > 0 && (
+        {feePlan && (
           <>
             {" "}
-            This schedule is {schedule.length} leg{schedule.length === 1 ? "" : "s"} × {txPerLeg}{" "}
-            transaction{txPerLeg === 1 ? "" : "s"} ={" "}
-            {strk(fee * BigInt(schedule.length * txPerLeg))} STRK in pool fees.
+            This schedule is {feePlan.legCount} leg{feePlan.legCount === 1 ? "" : "s"} × {feePlan.transactionsPerLeg}{" "}
+            transactions = {strk(feePlan.executionFees)} STRK in entry fees.
           </>
         )}
       </p>
@@ -552,26 +589,6 @@ export default function ExecutePanel({
             {busy === "connect" ? "connecting…" : `Connect ${w.name}`}
           </button>
         ))}
-        {deployed && (
-          <label className="field">
-            Staged execution shape
-            <select
-              value={shape}
-              onChange={(e) => {
-                setShape(e.target.value);
-                setDirectVaultPassed(null);
-                setLegs((l) =>
-                  Object.fromEntries(
-                    Object.entries(l).map(([k, v]) => [k, { ...v, investDryRun: false }]),
-                  ),
-                );
-              }}
-            >
-              <option value="implicit">transfer + invoke</option>
-              <option value="explicit-withdraw">transfer + withdraw + invoke</option>
-            </select>
-          </label>
-        )}
       </div>
 
       {support && (
@@ -614,26 +631,67 @@ export default function ExecutePanel({
           {scheduleSource === "sepolia-rehearsal" ? (
             <>
               Free rehearsal ready: prove one {strk(schedule[0].amount)} STRK shield action below.
-              This fallback is not a cohort recommendation, and paid submission stays locked until
-              fee-net amount handling is verified.
+              This fallback is not a cohort recommendation; paid submission remains locked.
             </>
           ) : (
             <>
-              Execution ready: {schedule.length} leg{schedule.length === 1 ? "" : "s"}. The free
-              shield dry run is directly below the balance section.
+              Schedule ready for free validation: {schedule.length} leg
+              {schedule.length === 1 ? "" : "s"}. Paid submission additionally requires a verified
+              shielded STRK fee reserve.
             </>
           )}
         </p>
+      )}
+
+      {feePlan && (
+        <div className="verdict" style={{ marginTop: 22 }}>
+          <h3>Keep the cohort amounts intact with a separate STRK fee reserve.</h3>
+          <div className="facts" style={{ marginTop: 14 }}>
+            <span className="tag">public shields · {strk(scheduledAmount)} STRK gross</span>
+            <span className="tag">vault withdrawals · {strk(scheduledAmount)} STRK</span>
+            <span className="tag">
+              {feePlan.transactionsPerLeg} fees/leg · {strk(feePlan.requiredReserve)} STRK reserve
+            </span>
+            <span className={`tag ${feePlan.reserveVerified ? "hot" : ""}`}>
+              {feePlan.balanceKnown
+                ? `${strk(feePlan.existingReserve)} STRK shielded balance shared`
+                : "shielded STRK balance not shared"}
+            </span>
+          </div>
+          <p style={{ marginTop: 14 }}>
+            Each scheduled amount is used unchanged for both the public shield and vault leg. A
+            fresh account first needs a separate {strk(feePlan.freshBootstrapDeposit)} STRK gross
+            reserve deposit: {strk(feePlan.requiredReserve)} STRK net reserve plus one{" "}
+            {strk(feePlan.freshBootstrapFee)} STRK bootstrap fee.
+            {feePlan.balanceKnown && feePlan.reserveShortfall > 0n && (
+              <>
+                {" "}With the shared balance, only {strk(feePlan.bootstrapDeposit)} STRK gross is
+                still needed.
+              </>
+            )}{" "}
+            Without that reserve, the same legs would reach the vault as{" "}
+            {feePlan.withoutReserveVaultAmounts.map((amount) => strk(amount)).join(" / ")} STRK,
+            invalidating the analyzed exit denominations.
+          </p>
+          <p
+            className={paidGateOpen ? "status" : "err"}
+            style={{ marginTop: 12 }}
+          >
+            {paidGateOpen
+              ? `Fee reserve verified: ${strk(feePlan.requiredReserve)} STRK covers all ${feePlan.executionTransactions} entry transactions.`
+              : `Paid submission locked: ${paidGateReason}`}
+          </p>
+        </div>
       )}
 
       {ready && deployed && network === "sepolia" && (
         <div className="verdict" style={{ marginTop: 22 }}>
           <h3>Test stage 2 with funds already shielded.</h3>
           <p>
-            Choose either exact action shape below. Each button constructs and submits the shape
-            printed on that button, updates the staged-execution selector, spends no pool fee and
-            sends no transaction. Start with 1 STRK; proving also needs enough shielded STRK to
-            account for the 2 STRK Sepolia pool fee.
+            This constructs the proven <span className="mono">transfer OPEN + invoke</span> action,
+            spends no pool fee and sends no transaction. Start with 1 STRK; proving also needs
+            enough shielded STRK to account for the {fee === null ? "live" : strk(fee)} STRK
+            Sepolia pool fee.
           </p>
           <div className="controls" style={{ marginTop: 18 }}>
             <label className="field">
@@ -644,33 +702,30 @@ export default function ExecutePanel({
                 value={directVaultAmount}
                 onChange={(e) => {
                   setDirectVaultAmount(e.target.value);
-                  setDirectVaultPassed(null);
+                  setDirectVaultPassed(false);
                   setDirectVaultAttempt(null);
                 }}
                 aria-label="Direct vault dry-run amount in STRK"
               />
             </label>
-            {["implicit", "explicit-withdraw"].map((testShape) => (
-              <button
-                key={testShape}
-                type="button"
-                className="chip"
-                onClick={() => dryRunExistingVault(testShape)}
-                disabled={busy !== null}
-                aria-pressed={directVaultPassed === testShape}
-              >
-                {busy === `dryrun-existing-vault-${testShape}`
-                  ? `proving ${testShape}…`
-                  : directVaultPassed === testShape
-                    ? `${testShape} passed ✓`
-                    : `Test ${testShape} (free) →`}
-              </button>
-            ))}
+            <button
+              type="button"
+              className="chip"
+              onClick={dryRunExistingVault}
+              disabled={busy !== null}
+              aria-pressed={directVaultPassed}
+            >
+              {busy === "dryrun-existing-vault"
+                ? "proving transfer + invoke…"
+                : directVaultPassed
+                  ? "transfer + invoke passed ✓"
+                  : "Test transfer + invoke (free) →"}
+            </button>
           </div>
           {directVaultAttempt && (
             <details open style={{ marginTop: 18 }}>
               <summary className="status" style={{ cursor: "pointer" }}>
-                Latest click submitted: {directVaultAttempt.shape}
+                Exact free dry-run request
               </summary>
               <pre
                 className="mono"
@@ -735,7 +790,8 @@ export default function ExecutePanel({
               <thead>
                 <tr>
                   <th>Leg</th>
-                  <th>Amount</th>
+                  <th>Public shield → vault</th>
+                  <th>Fee reserve</th>
                   <th>Entry / exit cohort</th>
                   <th>Status</th>
                   <th>1 · shield</th>
@@ -749,7 +805,8 @@ export default function ExecutePanel({
                   return (
                     <tr key={i} className={status.ready ? "chosen" : ""}>
                       <td>{i + 1}</td>
-                      <td>{strk(leg.amount)} STRK</td>
+                      <td>{strk(leg.amount)} → {strk(leg.amount)} STRK</td>
+                      <td>{feePlan ? strk(feePlan.feePerTransaction * 2n) : "—"} STRK</td>
                       <td>
                         {leg.entryCohort ?? leg.cohort} / {leg.exitKnown ? leg.exitCohort : "?"}
                         {!leg.covered && <span className="pill">no cover</span>}
@@ -763,11 +820,11 @@ export default function ExecutePanel({
                           disabled={
                             busy !== null ||
                             Boolean(state.shieldedAt) ||
-                            !paidSubmissionAllowed ||
+                            !paidGateOpen ||
                             (!state.shieldTx && !shieldDryRun)
                           }
                         >
-                          {!paidSubmissionAllowed
+                          {!paidGateOpen
                             ? "paid submit locked"
                             : busy === `shield-${i}`
                             ? "submitting…"
@@ -808,13 +865,15 @@ export default function ExecutePanel({
                             type="button"
                             className="chip"
                             onClick={() => invest(i)}
-                            disabled={busy !== null || state.stage === "invested"}
+                            disabled={busy !== null || state.stage === "invested" || !paidGateOpen}
                           >
-                            {busy === `invest-${i}`
-                              ? "submitting…"
-                              : state.stage === "invested"
-                                ? "done ✓"
-                                : "invest"}
+                            {!paidGateOpen
+                              ? "paid submit locked"
+                              : busy === `invest-${i}`
+                                ? "submitting…"
+                                : state.stage === "invested"
+                                  ? "done ✓"
+                                  : "invest"}
                           </button>
                         )}
                       </td>

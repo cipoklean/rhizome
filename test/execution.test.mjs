@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   acceptedReceiptBlock,
+  buildFeeReservePlan,
   buildRehearsalFallback,
   executionProgressKey,
   readExecutionProgress,
@@ -141,4 +142,107 @@ test("a Sepolia rehearsal fallback exists above the two-operation fee floor", ()
 test("a rehearsal fallback refuses amounts consumed by two pool fees", () => {
   assert.deepEqual(buildRehearsalFallback({ amount: 4n, feeAmount: 2n }), []);
   assert.deepEqual(buildRehearsalFallback({ amount: 3n, feeAmount: 2n }), []);
+});
+
+
+test("one fresh leg reserves both execution fees and bootstraps net of its own fee", () => {
+  const plan = buildFeeReservePlan({ schedule: [{ amount: 10n }], feeAmount: 2n });
+  assert.deepEqual(
+    {
+      legCount: plan.legCount,
+      executionTransactions: plan.executionTransactions,
+      requiredReserve: plan.requiredReserve,
+      reserveShortfall: plan.reserveShortfall,
+      bootstrapFee: plan.bootstrapFee,
+      bootstrapDeposit: plan.bootstrapDeposit,
+      totalFeesWithBootstrap: plan.totalFeesWithBootstrap,
+      vaultAmounts: plan.vaultAmounts,
+      withoutReserveVaultAmounts: plan.withoutReserveVaultAmounts,
+      reserveVerified: plan.reserveVerified,
+      paidSubmissionAllowed: plan.paidSubmissionAllowed,
+    },
+    {
+      legCount: 1,
+      executionTransactions: 2,
+      requiredReserve: 4n,
+      reserveShortfall: 4n,
+      bootstrapFee: 2n,
+      bootstrapDeposit: 6n,
+      totalFeesWithBootstrap: 6n,
+      vaultAmounts: [10n],
+      withoutReserveVaultAmounts: [6n],
+      reserveVerified: false,
+      paidSubmissionAllowed: false,
+    },
+  );
+});
+
+test("multiple legs preserve every cohort amount with a shared reserve", () => {
+  const schedule = [{ amount: 4000n }, { amount: 4000n }, { amount: 2000n }];
+  const plan = buildFeeReservePlan({ schedule, feeAmount: 6n, shieldedStrkBalance: 36n });
+  assert.equal(plan.transactionsPerLeg, 2);
+  assert.equal(plan.executionTransactions, 6);
+  assert.equal(plan.requiredReserve, 36n);
+  assert.equal(plan.bootstrapDeposit, 0n);
+  assert.deepEqual(plan.vaultAmounts, [4000n, 4000n, 2000n]);
+  assert.equal(plan.preservesCohorts, true);
+  assert.equal(plan.reserveVerified, true);
+  assert.equal(plan.paidSubmissionAllowed, true);
+});
+
+test("a partial reserve top-up deposits the shortfall plus one bootstrap fee", () => {
+  const plan = buildFeeReservePlan({
+    schedule: [{ amount: 100n }, { amount: 100n }],
+    feeAmount: 6n,
+    shieldedStrkBalance: 10n,
+  });
+  assert.equal(plan.requiredReserve, 24n);
+  assert.equal(plan.reserveShortfall, 14n);
+  assert.equal(plan.bootstrapFee, 6n);
+  assert.equal(plan.bootstrapDeposit, 20n);
+  assert.equal(plan.freshBootstrapFee, 6n);
+  assert.equal(plan.freshBootstrapDeposit, 30n);
+  assert.equal(plan.totalFeesWithBootstrap, 30n);
+  assert.equal(plan.reserveVerified, false);
+});
+
+test("zero-fee execution needs no reserve even when balance sharing is unavailable", () => {
+  const plan = buildFeeReservePlan({ schedule: [{ amount: 1n }], feeAmount: 0n });
+  assert.equal(plan.requiredReserve, 0n);
+  assert.equal(plan.bootstrapDeposit, 0n);
+  assert.equal(plan.reserveVerified, true);
+  assert.equal(plan.paidSubmissionAllowed, true);
+});
+
+test("fee planning fails closed on invalid inputs and unknown or insufficient balances", () => {
+  assert.throws(() => buildFeeReservePlan({ schedule: [], feeAmount: 1n }), /at least one/);
+  assert.throws(
+    () => buildFeeReservePlan({ schedule: [{ amount: 1n }], feeAmount: -1n }),
+    /cannot be negative/,
+  );
+  assert.throws(
+    () => buildFeeReservePlan({ schedule: [{ amount: 0n }], feeAmount: 1n }),
+    /positive integer amount/,
+  );
+  assert.throws(
+    () =>
+      buildFeeReservePlan({
+        schedule: [{ amount: 1n }],
+        feeAmount: 1n,
+        shieldedStrkBalance: "not-an-integer",
+      }),
+    /balance must be an integer/,
+  );
+
+  const unknown = buildFeeReservePlan({ schedule: [{ amount: 100n }], feeAmount: 6n });
+  assert.equal(unknown.balanceKnown, false);
+  assert.equal(unknown.paidSubmissionAllowed, false);
+
+  const insufficient = buildFeeReservePlan({
+    schedule: [{ amount: 100n }],
+    feeAmount: 6n,
+    shieldedStrkBalance: 11n,
+  });
+  assert.equal(insufficient.reserveShortfall, 1n);
+  assert.equal(insufficient.paidSubmissionAllowed, false);
 });

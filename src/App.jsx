@@ -634,9 +634,13 @@ export default function App() {
         schedule={executionPlan.schedule}
         scheduleSource={executionPlan.source}
         paidSubmissionAllowed={executionPlan.paidSubmissionAllowed}
+        paidSubmissionReason={
+          executionPlan.source === "sepolia-rehearsal"
+            ? "The synthetic Sepolia leg is only an action-path rehearsal, not a cohort recommendation."
+            : null
+        }
         analysisError={analysis?.error ?? null}
         fee={state.fee ?? null}
-        feeModel={feeModel}
         delay={timing?.rec ?? null}
         secondsPerBlock={state.secondsPerBlock ?? null}
       />

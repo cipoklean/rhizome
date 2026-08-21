@@ -136,7 +136,7 @@ test("local validation identifies a non-canonical felt by field", () => {
   assert.throws(() => canonicalFelt(`0x1${"0".repeat(63)}`), /exceeds 63 hex digits/);
 });
 
-test("the documented vault dry run opens an output note then invokes", () => {
+test("the proven vault dry run opens an output note then invokes", () => {
   const actions = buildTrancheActions({
     anonymizer: "0xaaa",
     inToken: "0x111",
@@ -144,35 +144,9 @@ test("the documented vault dry run opens an output note then invokes", () => {
     amount: 1n,
     recipient: "0x333",
     operation: OPERATION.Deposit,
-    shape: "implicit",
   });
   assert.deepEqual(actions, [
     { type: "transfer", token: "0x222", amount: "OPEN", recipient: "0x333" },
-    {
-      type: "invoke",
-      contract: "0xaaa",
-      calldata: ["0x0", "0x111", "0x222", "0x1", "0x0", "${openNoteIds[0]}"],
-    },
-  ]);
-});
-
-test("the explicit vault shape funds the helper before invoking it", () => {
-  const actions = buildTrancheActions({
-    anonymizer: "0xaaa",
-    inToken: "0x111",
-    outToken: "0x222",
-    amount: 1n,
-    recipient: "0x333",
-    shape: "explicit-withdraw",
-  });
-  assert.deepEqual(actions, [
-    { type: "transfer", token: "0x222", amount: "OPEN", recipient: "0x333" },
-    {
-      type: "withdraw",
-      token: "0x111",
-      amount: "0x1",
-      recipient: "0xaaa",
-    },
     {
       type: "invoke",
       contract: "0xaaa",
@@ -188,7 +162,6 @@ test("the visible dry-run diagnostic matches starknet.js request serialization",
     outToken: "0x222",
     amount: 1n,
     recipient: "0x333",
-    shape: "explicit-withdraw",
   });
   assert.deepEqual(buildPrepareInvokeRequest(actions), {
     type: "wallet_strk20PrepareInvoke",

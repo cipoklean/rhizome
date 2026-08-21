@@ -187,8 +187,15 @@ can create it.
 ## Status
 
 Early. The analysis layer is complete and measured against mainnet. Execution is wired as a
-two-stage runner per leg — shield, wait out the measured delay, then invoke the vault — gated on a
-dry run of each action shape, and it has not yet been run against a wallet on mainnet.
+two-stage runner per leg — shield, wait out the measured delay, then invoke the vault. The
+canonical `transfer OPEN + invoke` vault action passed a free Ready dry run against the
+wallet-discoverable Sepolia mock; no paid pool transaction was sent.
+
+Paid execution now fails closed on fee funding. Preserving the cohort amount `D` on both public
+legs needs a separate shielded STRK reserve of `2 × fee × legs`. Ready must share a balance that
+verifies that reserve before either paid stage can submit. For a fresh account, bootstrapping a net
+reserve `R` requires one separate public deposit of `R + fee`, because that bootstrap transaction
+also reimburses one pool fee.
 
 | | |
 | --- | --- |
@@ -196,11 +203,10 @@ dry run of each action shape, and it has not yet been run against a wallet on ma
 | Sepolia class hash | `0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a` |
 | Mainnet anonymizer | not deployed |
 
-The two-action shape for the vault leg (`transfer` with `amount: "OPEN"`, then `invoke`) is the
-documented one, but the pool also has to get the input tokens to the helper, and the documented
-example does not show that leg. Both shapes are selectable in the UI and neither can submit until
-its dry run passes — `strk20PrepareInvoke` proves without spending a fee, so the wallet settles the
-question rather than a guess.
+The accepted vault leg is the two-action `transfer` with `amount: "OPEN"`, then `invoke` request.
+It is the documented private-DeFi shape and passed a Ready simulation against the configured
+Sepolia anonymizer and metadata-capable mock vault. The unneeded experimental explicit-withdraw
+variant has been removed; the exact request remains visible in the UI for free re-verification.
 
 `npm run verify:facts` checks the deployed class hash against the class committed in
 `artifacts/`, so the reviewed bytecode and the deployed bytecode are provably the same.

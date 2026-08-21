@@ -249,11 +249,9 @@ function u256Felts(value) {
  * of the open note to fill. Our `privacy_invoke(operation, in_token, out_token,
  * assets: u256, note_id)` matches — with u256 occupying two felts.
  *
- * `shape` stays configurable despite the documentation, because the pool's own
- * balance accounting requires the input tokens to reach the helper somehow, and
- * the documented example does not show that leg. Which shape the pool accepts is
- * settled by dry-running against a real wallet, not by reading either source
- * harder.
+ * The accepted wallet shape is intentionally fixed. A Sepolia dry run proved
+ * `transfer OPEN + invoke`; adding an explicit withdraw is both unnecessary and
+ * a different, unproven request.
  */
 export function buildTrancheActions({
   anonymizer,
@@ -262,7 +260,6 @@ export function buildTrancheActions({
   amount,
   recipient,
   operation = OPERATION.Deposit,
-  shape = "implicit",
 }) {
   const inAddress = canonicalFelt(inToken, "input token");
   const outAddress = canonicalFelt(outToken, "output token");
@@ -286,20 +283,6 @@ export function buildTrancheActions({
     ],
   };
 
-  if (shape === "explicit-withdraw") {
-    // Phase order matters and may never go backwards:
-    // create note (5) -> withdraw (6) -> invoke (7).
-    return assertValidStrk20Actions([
-      openNote,
-      {
-        type: "withdraw",
-        token: inAddress,
-        amount: toHex(amount, "withdraw amount"),
-        recipient: anonymizerAddress,
-      },
-      invoke,
-    ]);
-  }
   return assertValidStrk20Actions([openNote, invoke]);
 }
 
