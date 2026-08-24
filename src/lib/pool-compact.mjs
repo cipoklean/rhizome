@@ -1,9 +1,9 @@
 // One helper that turns a full raw scan into the compact file the frontend paints from.
 // Both scripts/snapshot.mjs and scripts/snapshot-compact.mjs use this, so the
 // shipped pool-state.*.json can never drift from the build tool.
-import { classifyWithdrawals } from "../src/lib/pool.mjs";
-import { amountHistogram } from "../src/lib/cohorts.mjs";
-import { poolTransactionBlocks } from "../src/lib/timing.mjs";
+import { classifyWithdrawals } from "./pool.mjs";
+import { amountHistogram } from "./cohorts.mjs";
+import { poolTransactionBlocks } from "./timing.mjs";
 
 export function buildCompactPayload({ network, block, pool, token, fee, feeHistory, deposits, withdrawals, generatedAt }) {
   const { positions: exits, feeLegs, routers, routerStats, feeAmounts } = classifyWithdrawals(withdrawals, feeHistory);
