@@ -279,6 +279,21 @@ export default function ExecutePanel({
     throw last ?? new Error("receipt unavailable");
   }
 
+  // Wallet APIs return amounts as plain decimal strings (e.g. "500000000000000000");
+  // buildShieldActions / buildTrancheActions emit canonical hex felts (e.g. "0x56bc7...").
+  // Normalise either form to a decimal string so the matcher can compare them.
+  function normalizeAmount(a) {
+    if (typeof a === "bigint") return a.toString();
+    if (typeof a === "number") return BigInt(a).toString();
+    if (typeof a === "string") {
+      if (/^0x[0-9a-f]+$/i.test(a)) return BigInt(a).toString();
+      if (/^-?\d+$/.test(a)) return a;
+      const n = BigInt(a);
+      return n.toString();
+    }
+    return String(a ?? "");
+  }
+
   // Compare two action arrays for practical equality, tolerant of extra fields
   // and formatting differences the wallet may add.
   function actionsMatch(a, b) {
@@ -289,10 +304,10 @@ export default function ExecutePanel({
       if (av.type !== bv.type) return false;
       if (av.token !== bv.token) return false;
       if (av.type === "deposit" || av.type === "withdraw") {
-        return av.amount === bv.amount;
+        return normalizeAmount(av.amount) === normalizeAmount(bv.amount);
       }
       if (av.type === "transfer") {
-        return av.amount === bv.amount && av.recipient === bv.recipient;
+        return normalizeAmount(av.amount) === normalizeAmount(bv.amount) && av.recipient === bv.recipient;
       }
       if (av.type === "invoke") {
         return (
@@ -389,14 +404,39 @@ export default function ExecutePanel({
       } else {
         // No hash on record (e.g. a timed-out submission). Recover by asking
         // the wallet for its recent invokes and matching this schedule's
-        // actions; fall back to asking the user for the explorer hash.
+        // actions loosely (action count + token + amount), then try to link
+        // the resulting hash. Fall back to asking the user for the explorer hash.
         let found = null;
         try {
           const h = await account.strk20QueryTransactions?.({
             since: Date.now() - 24 * 60 * 60 * 1000,
           });
-          const want = JSON.stringify(shieldActionsFor(schedule[i]));
-          found = (h ?? []).find((t) => JSON.stringify(t.actions ?? []) === want)?.transaction_hash ?? null;
+          const want = shieldActionsFor(schedule[i]);
+          found = (h ?? []).find((t) => {
+            const actions = Array.isArray(t.actions) ? t.actions : [];
+            if (actions.length !== want.length) return false;
+            return actions.every((a, idx) => {
+              const w = want[idx];
+              if (!a || typeof a !== typeof w) return false;
+              if (a.type !== w.type) return false;
+              if (a.token !== w.token) return false;
+              if (w.type === "deposit" || w.type === "withdraw") {
+                return normalizeAmount(a.amount) === normalizeAmount(w.amount);
+              }
+              if (w.type === "transfer") {
+                return normalizeAmount(a.amount) === normalizeAmount(w.amount) && a.recipient === w.recipient;
+              }
+              if (w.type === "invoke") {
+                return (
+                  a.contract === w.contract &&
+                  Array.isArray(a.calldata) &&
+                  Array.isArray(w.calldata) &&
+                  a.calldata.length === w.calldata.length
+                );
+              }
+              return false;
+            });
+          })?.transaction_hash ?? null;
         } catch {}
         if (found) {
           patch(i, { shieldTx: found });
@@ -404,7 +444,7 @@ export default function ExecutePanel({
           if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending, no block yet.`, "info");
         } else {
           say(
-            `No transaction hash stored for piece ${i + 1}. Paste its hash from your wallet/explorer into the box below to link it.`,
+            `Could not auto-recover piece ${i + 1}'s hash from your wallet. If the wallet confirmed it, paste the hash into the box below to link it; otherwise resubmit from the Hide button.`,
             "info",
           );
           setHashPrompt({ kind: "shield", index: i });
