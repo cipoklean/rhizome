@@ -263,6 +263,49 @@ export default function ExecutePanel({
     return true;
   }
 
+  // Retry a receipt fetch a few times — RPC indexing can lag after private relays,
+  // and a single failed lookup is not evidence the tx doesn't exist.
+  async function retryReceipt(provider, tx, attempts = 3, gapMs = 2000) {
+    let last = null;
+    for (let n = 0; n < attempts; n++) {
+      try {
+        const r = await provider.getTransactionReceipt(tx);
+        if (r) return r;
+      } catch (e) {
+        last = e;
+      }
+      if (n < attempts - 1) await new Promise((r) => setTimeout(r, gapMs));
+    }
+    throw last ?? new Error("receipt unavailable");
+  }
+
+  // Compare two action arrays for practical equality, tolerant of extra fields
+  // and formatting differences the wallet may add.
+  function actionsMatch(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((av, i) => {
+      const bv = b[i];
+      if (!bv || typeof av !== typeof bv) return false;
+      if (av.type !== bv.type) return false;
+      if (av.token !== bv.token) return false;
+      if (av.type === "deposit" || av.type === "withdraw") {
+        return av.amount === bv.amount;
+      }
+      if (av.type === "transfer") {
+        return av.amount === bv.amount && av.recipient === bv.recipient;
+      }
+      if (av.type === "invoke") {
+        return (
+          av.contract === bv.contract &&
+          Array.isArray(av.calldata) &&
+          Array.isArray(bv.calldata) &&
+          av.calldata.length === bv.calldata.length
+        );
+      }
+      return false;
+    });
+  }
+
   // First condition blocking paid moves, phrased for the person clicking.
   // Used by both the click handlers (so a click always explains itself) and
   // nowhere else — buttons stay clickable so dead clicks are impossible.
@@ -341,7 +384,7 @@ export default function ExecutePanel({
     try {
       const provider = await connect(net.rpc);
       if (tx) {
-        const receipt = await provider.getTransactionReceipt(tx);
+        const receipt = await retryReceipt(provider, tx);
         if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending, no block yet.`, "info");
       } else {
         // No hash on record (e.g. a timed-out submission). Recover by asking
@@ -357,7 +400,7 @@ export default function ExecutePanel({
         } catch {}
         if (found) {
           patch(i, { shieldTx: found });
-          const receipt = await provider.getTransactionReceipt(found);
+          const receipt = await retryReceipt(provider, found);
           if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending, no block yet.`, "info");
         } else {
           say(
@@ -423,6 +466,20 @@ export default function ExecutePanel({
 
   async function invest(i) {
     if (!account || !legs[i]?.investDryRun || !paidGateOpen) return;
+    const leg = legs[i];
+    // The contract rejects spends of newly-shielded funds for ~10 blocks.
+    // Surface that as a clear message instead of letting the wallet surface
+    // a generic UNKNOWN_ERROR.
+    if (leg.shieldedAt != null && block != null) {
+      const maturityBlock = BigInt(leg.shieldedAt) + NOTE_MATURITY_BLOCKS;
+      if (BigInt(block) < maturityBlock) {
+        say(
+          `Piece ${i + 1}: shielded funds are not spendable yet. Wait until block ${maturityBlock.toLocaleString()} (about ${formatDelay(Number(maturityBlock - BigInt(block)), secondsPerBlock)} from now).`,
+          "err",
+        );
+        return;
+      }
+    }
     setBusy(`invest-${i}`);
     try {
       await requireSelectedChain();
@@ -454,7 +511,7 @@ export default function ExecutePanel({
     setBusy(`check-invest-${i}`);
     try {
       const provider = await connect(net.rpc);
-      const receipt = await provider.getTransactionReceipt(tx);
+      const receipt = await retryReceipt(provider, tx);
       if (!acceptInvestReceipt(i, receipt)) say(`Piece ${i + 1} vault receipt still pending.`, "info");
     } catch (e) {
       if (/revert/i.test(e.message)) {
