@@ -40,6 +40,7 @@ export default function ExecutePanel({
   const [wallets, setWallets] = useState(null);
   const [selectedWallet, setSelectedWallet] = useState(null);
   const [account, setAccount] = useState(null);
+  const [walletObj, setWalletObj] = useState(null);
   const [support, setSupport] = useState(null);
   const [balances, setBalances] = useState(null);
   const [directVaultAmount, setDirectVaultAmount] = useState("1");
@@ -177,6 +178,7 @@ export default function ExecutePanel({
       }
       setSelectedWallet(wallet);
       setAccount(acc);
+      setWalletObj(wallet);
       say(`Connected · ${acc.address.slice(0, 10)}… · ${net.chainId}`, "ok");
       phase = "balance consent";
       const tokens = [token, vToken].filter(Boolean);
@@ -416,9 +418,11 @@ export default function ExecutePanel({
         // the resulting hash. Fall back to asking the user for the explorer hash.
         let found = null;
         try {
-          const h = await account.strk20QueryTransactions?.({
-            since: Date.now() - 24 * 60 * 60 * 1000,
-          });
+          const h = walletObj && walletObj.strk20QueryTransactions
+            ? await walletObj.strk20QueryTransactions({
+                since: Date.now() - 24 * 60 * 60 * 1000,
+              })
+            : null;
           const want = shieldActionsFor(schedule[i]);
           found = (h ?? []).find((t) => {
             const actions = Array.isArray(t.actions) ? t.actions : [];
