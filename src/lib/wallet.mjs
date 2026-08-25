@@ -48,7 +48,16 @@ export async function checkStrk20Support(wallet) {
     const versions = await walletV6.supportedWalletApi(wallet);
     const list = Array.isArray(versions) ? versions : [versions];
     const supported = list.some(supportsStrk20PrivateDefiVersion);
-    return { supported, versions: list, minimumVersion: MIN_STRK20_WALLET_API };
+    let canQueryTxs = false;
+    try {
+      canQueryTxs = typeof wallet.strk20QueryTransactions === "function";
+    } catch {}
+    return {
+      supported,
+      versions: list,
+      minimumVersion: MIN_STRK20_WALLET_API,
+      canQueryTxs,
+    };
   } catch (e) {
     return {
       supported: false,

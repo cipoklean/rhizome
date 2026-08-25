@@ -686,6 +686,11 @@ export default function ExecutePanel({
               <div className="facts" style={{ marginTop: 12 }}>
                 <span className={`tag ${support.supported ? "hot" : ""}`}>wallet {support.versions.join(" / ") || "unknown"}</span>
                 <span className="tag">{support.supported ? "ready for private moves" : `needs API ${support.minimumVersion}`}</span>
+                {support.canQueryTxs != null && (
+                  <span className={`tag ${support.canQueryTxs ? "hot" : ""}`}>
+                    {support.canQueryTxs ? "can recover hashes" : "can't auto-recover txs"}
+                  </span>
+                )}
                 {account && <span className="tag">{account.address.slice(0, 10)}…</span>}
               </div>
             )}
