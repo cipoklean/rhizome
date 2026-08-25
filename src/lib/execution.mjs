@@ -79,11 +79,17 @@ export function sanitizeExecutionProgress(value, scheduleLength) {
     const shieldedAt = blockNumber(leg.shieldedAt);
     let stage = DURABLE_STAGES.has(leg.stage) ? leg.stage : undefined;
 
-    // A landing block is stronger evidence than a stale stage label.
-    if (shieldedAt !== null && stage === "shield-pending") stage = "shielded";
+    // A landing block is stronger evidence than any stale stage label.
+    if (shieldedAt !== null && (stage === "shield-pending" || stage === "failed")) {
+      stage = "shielded";
+    }
     // Conversely, a pending shield without a hash cannot be checked and must not
     // disable a safe resubmission forever.
     if (stage === "shield-pending" && !shieldTx) stage = undefined;
+    // A "failed" verdict next to a submitted hash is not trustworthy — the
+    // error may have struck after the wallet accepted the transaction. Demote
+    // to a plain checkable leg and let the receipt decide.
+    if (stage === "failed" && shieldTx) stage = undefined;
 
     const clean = { investDryRun: false };
     if (stage) clean.stage = stage;

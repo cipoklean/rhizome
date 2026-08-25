@@ -7,6 +7,7 @@ import {
   buildTrancheActions,
   canonicalFelt,
   ensureWalletChain,
+  execute,
   resolveChainId,
   sameChain,
   supportsStrk20PrivateDefiVersion,
@@ -167,4 +168,28 @@ test("the visible dry-run diagnostic matches starknet.js request serialization",
     type: "wallet_strk20PrepareInvoke",
     params: { actions, simulate: true },
   });
+});
+
+test("a wallet that never answers cannot hold the runner hostage", async () => {
+  const actions = buildShieldActions({
+    token: "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    amount: 1n,
+  });
+  await assert.rejects(
+    execute({ strk20InvokeTransaction: () => new Promise(() => {}) }, actions, { timeoutMs: 30 }),
+    (e) => e.code === "EXECUTE_TIMEOUT" && /use Check/.test(e.message),
+  );
+});
+
+test("a slow-but-successful wallet answer still wins the race", async () => {
+  const actions = buildShieldActions({
+    token: "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    amount: 1n,
+  });
+  const result = await execute(
+    { strk20InvokeTransaction: async () => ({ transaction_hash: "0xabc" }) },
+    actions,
+    { timeoutMs: 2000 },
+  );
+  assert.equal(result.transaction_hash, "0xabc");
 });

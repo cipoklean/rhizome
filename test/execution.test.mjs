@@ -35,6 +35,25 @@ test("a reverted receipt can never advance a leg", () => {
   );
 });
 
+test("a 'failed' label never buries a submitted transaction", () => {
+  // Error struck after the wallet accepted the submission: the hash must
+  // survive so the leg stays checkable instead of reading as a dead end.
+  assert.deepEqual(sanitizeExecutionProgress({ 0: { stage: "failed", shieldTx: "0xabc" } }, 1), {
+    0: { shieldTx: "0xabc", investDryRun: false },
+  });
+  // A landing block outranks a false failure verdict.
+  assert.deepEqual(
+    sanitizeExecutionProgress({ 0: { stage: "failed", shieldTx: "0xabc", shieldedAt: 42 } }, 1),
+    {
+      0: { stage: "shielded", shieldTx: "0xabc", shieldedAt: 42, investDryRun: false },
+    },
+  );
+  // A failure before anything was submitted stays a visible, retryable error.
+  assert.deepEqual(sanitizeExecutionProgress({ 0: { stage: "failed" } }, 1), {
+    0: { stage: "failed", investDryRun: false },
+  });
+});
+
 test("execution progress keys separate accounts, networks, venues and schedules", () => {
   const base = {
     chainId: "0x1",

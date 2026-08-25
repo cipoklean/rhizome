@@ -321,8 +321,33 @@ export async function dryRun(account, actions) {
   return account.strk20PrepareInvoke(assertValidStrk20Actions(actions), true);
 }
 
-export async function execute(account, actions) {
-  return account.strk20InvokeTransaction(assertValidStrk20Actions(actions));
+/**
+ * Submit through the wallet, but never wait forever.
+ *
+ * A wallet that accepted a transaction can still drop its response — the tab
+ * was backgrounded, the RPC bridge stalled. An unbounded await here strands
+ * `busy` and locks every other leg of the schedule. Time out and throw a
+ * distinguishable error; the caller keeps the submission attempt checkable
+ * rather than declaring the leg failed (the wallet may still relay it).
+ */
+export function execute(account, actions, { timeoutMs = 120000 } = {}) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          Object.assign(
+            new Error("wallet did not answer in time — if you approved, use Check once it lands"),
+            { code: "EXECUTE_TIMEOUT" },
+          ),
+        ),
+      timeoutMs,
+    );
+  });
+  return Promise.race([
+    account.strk20InvokeTransaction(assertValidStrk20Actions(actions)),
+    timeout,
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**

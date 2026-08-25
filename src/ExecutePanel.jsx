@@ -52,6 +52,10 @@ export default function ExecutePanel({
   const [delayMode, setDelayMode] = useState(network === "sepolia" ? "rehearsal" : "measured");
   const [legs, setLegs] = useState({});
   const [hydratedProgressKey, setHydratedProgressKey] = useState(null);
+  // Recovery lane for submissions whose hash never reached us (wallet answered
+  // too slowly): the user pastes the explorer/wallet hash, we link the leg.
+  const [hashPrompt, setHashPrompt] = useState(null);
+  const [hashInput, setHashInput] = useState("");
 
   const anonymizer = net.anonymizer;
   const vToken = net.vesu?.vTokens?.STRK ?? null;
@@ -267,6 +271,8 @@ export default function ExecutePanel({
       await requireSelectedChain();
       say(`Piece ${i + 1}: hiding ${strk(schedule[i].amount)} STRK — approve in wallet (2 prompts).`);
       const { transaction_hash } = await execute(account, shieldActionsFor(schedule[i]));
+      // The wallet accepted the submission — from here on this leg is checkable,
+      // never "failed", no matter what happens while waiting for the receipt.
       patch(i, { stage: "shield-pending", shieldTx: transaction_hash });
       say(`Piece ${i + 1} hide sent: ${transaction_hash}`, "ok");
       const provider = await connect(net.rpc);
@@ -275,8 +281,18 @@ export default function ExecutePanel({
         say(`Piece ${i + 1} sent but not yet on-chain. Clock hasn't started — use Check.`, "info");
       }
     } catch (e) {
-      patch(i, { stage: "failed" });
-      say(`Piece ${i + 1} hide failed: ${e.message}`, "err");
+      if (e?.code === "EXECUTE_TIMEOUT") {
+        // Submission state unknown. Leave any prior hash intact and keep the
+        // button as Check — resubmitting blind could double-spend the leg.
+        patch(i, { stage: "shield-pending" });
+        say(
+          `Piece ${i + 1}: wallet did not answer in time. If you approved, wait for it to land, then press Check. Do NOT approve a second hide for this piece.`,
+          "err",
+        );
+      } else {
+        patch(i, { stage: "failed" });
+        say(`Piece ${i + 1} hide failed: ${e.message}`, "err");
+      }
     } finally {
       setBusy(null);
     }
@@ -284,12 +300,36 @@ export default function ExecutePanel({
 
   async function checkShield(i) {
     const tx = legs[i]?.shieldTx;
-    if (!tx) return;
     setBusy(`check-shield-${i}`);
     try {
       const provider = await connect(net.rpc);
-      const receipt = await provider.getTransactionReceipt(tx);
-      if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending — no block yet.`, "info");
+      if (tx) {
+        const receipt = await provider.getTransactionReceipt(tx);
+        if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending — no block yet.`, "info");
+      } else {
+        // No hash on record (e.g. a timed-out submission). Recover by asking
+        // the wallet for its recent invokes and matching this schedule's
+        // actions; fall back to asking the user for the explorer hash.
+        let found = null;
+        try {
+          const h = await account.strk20QueryTransactions?.({
+            since: Date.now() - 24 * 60 * 60 * 1000,
+          });
+          const want = JSON.stringify(shieldActionsFor(schedule[i]));
+          found = (h ?? []).find((t) => JSON.stringify(t.actions ?? []) === want)?.transaction_hash ?? null;
+        } catch {}
+        if (found) {
+          patch(i, { shieldTx: found });
+          const receipt = await provider.getTransactionReceipt(found);
+          if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending — no block yet.`, "info");
+        } else {
+          say(
+            `No transaction hash stored for piece ${i + 1}. Paste its hash from your wallet/explorer into the box below to link it.`,
+            "info",
+          );
+          setHashPrompt({ kind: "shield", index: i });
+        }
+      }
     } catch (e) {
       if (/revert/i.test(e.message)) {
         patch(i, { stage: "failed" });
@@ -324,6 +364,26 @@ export default function ExecutePanel({
     return true;
   }
 
+  // Link a pasted explorer/wallet hash to a leg whose submission answer never
+  // reached us, so its receipt can be fetched like any other.
+  function linkHash(event) {
+    event?.preventDefault?.();
+    const target = hashPrompt;
+    const value = hashInput.trim();
+    if (!target || !/^0x[0-9a-fA-F]{60,70}$/.test(value)) {
+      say("That does not look like a transaction hash (expected 0x…).", "err");
+      return;
+    }
+    const field = target.kind === "shield" ? "shieldTx" : "investTx";
+    patch(target.index, { [field]: value });
+    if (target.kind === "shield" && !legs[target.index]?.shieldedAt) {
+      patch(target.index, { stage: "shield-pending" });
+    }
+    setHashPrompt(null);
+    setHashInput("");
+    say(`Piece ${target.index + 1} linked to ${value} — press Check.`, "ok");
+  }
+
   async function invest(i) {
     if (!account || !legs[i]?.investDryRun || !paidGateOpen) return;
     setBusy(`invest-${i}`);
@@ -336,8 +396,16 @@ export default function ExecutePanel({
       const result = await confirm(provider, transaction_hash);
       if (!result.confirmed || !acceptInvestReceipt(i, result.receipt)) say(`Piece ${i + 1} sent but not yet on-chain.`, "info");
     } catch (e) {
-      patch(i, { stage: "failed" });
-      say(`Piece ${i + 1} vault move failed: ${e.message}`, "err");
+      if (e?.code === "EXECUTE_TIMEOUT") {
+        patch(i, { stage: "invest-pending" });
+        say(
+          `Piece ${i + 1}: wallet did not answer in time. If you approved the vault move, wait for it to land, then press Check. Do NOT approve a second one.`,
+          "err",
+        );
+      } else {
+        patch(i, { stage: "failed" });
+        say(`Piece ${i + 1} vault move failed: ${e.message}`, "err");
+      }
     } finally {
       setBusy(null);
     }
@@ -386,9 +454,12 @@ export default function ExecutePanel({
     const leg = legs[i] ?? {};
     if (leg.stage === "invested") return { label: "in vault ✓", done: true };
     if (leg.stage === "invest-pending") return { label: "entering vault…", done: false };
-    if (leg.stage === "failed") return { label: "failed", done: false };
+    // A submitted-but-unconfirmed hide is checkable, never a dead end.
+    if (!leg.shieldedAt && leg.shieldTx) {
+      return { label: "hiding… check receipt", done: false, pendingShield: true };
+    }
+    if (leg.stage === "failed") return { label: "failed", done: false, retryable: true };
     if (!leg.shieldedAt) {
-      if (leg.shieldTx) return { label: "hiding… check receipt", done: false, pendingShield: true };
       return { label: leg.stage === "shielding" ? "hiding…" : "not hidden yet", done: false };
     }
     const left = blocksLeft(i);
@@ -577,7 +648,7 @@ export default function ExecutePanel({
                               onClick={() => (state.shieldTx && !state.shieldedAt ? checkShield(i) : shield(i))}
                               disabled={busy != null || Boolean(state.shieldedAt) || !paidGateOpen || (!state.shieldTx && !shieldDryRun)}
                             >
-                              {!paidGateOpen ? "locked" : busy === `shield-${i}` ? "sending…" : busy === `check-shield-${i}` ? "checking…" : state.shieldedAt ? `block ${state.shieldedAt}` : state.shieldTx ? "check" : "hide"}
+                              {!paidGateOpen ? "locked" : busy === `shield-${i}` ? "sending…" : busy === `check-shield-${i}` ? "checking…" : state.shieldedAt ? `block ${state.shieldedAt}` : state.shieldTx ? "check" : status.retryable ? "retry" : "hide"}
                             </button>
                           </td>
                           <td>
@@ -675,6 +746,34 @@ export default function ExecutePanel({
             {JSON.stringify({ hide: shieldActionsFor(schedule[0]), "enter vault": deployed ? investActionsFor(schedule[0]) : "needs helper" }, null, 2)}
           </pre>
         </details>
+      )}
+
+      {hashPrompt && (
+        <form className="controls" style={{ marginTop: 14 }} onSubmit={linkHash}>
+          <label className="field" style={{ flex: 1 }}>
+            Paste the transaction hash for piece {hashPrompt.index + 1} ({hashPrompt.kind === "shield" ? "hide" : "vault"})
+            <input
+              type="text"
+              value={hashInput}
+              onChange={(e) => setHashInput(e.target.value)}
+              placeholder="0x…"
+              aria-label="Transaction hash"
+            />
+          </label>
+          <button type="submit" className="chip">
+            link
+          </button>
+          <button
+            type="button"
+            className="chip"
+            onClick={() => {
+              setHashPrompt(null);
+              setHashInput("");
+            }}
+          >
+            dismiss
+          </button>
+        </form>
       )}
 
       {log.length > 0 && (
