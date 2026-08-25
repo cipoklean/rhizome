@@ -263,20 +263,29 @@ export default function ExecutePanel({
     return true;
   }
 
-  // Retry a receipt fetch a few times — RPC indexing can lag after private relays,
-  // and a single failed lookup is not evidence the tx doesn't exist.
-  async function retryReceipt(provider, tx, attempts = 3, gapMs = 2000) {
+  // Retry a receipt fetch a few times across every configured RPC endpoint.
+  // Private / relayed STRK20 transactions may not be visible to the first
+  // reachable provider, so we fan out across all endpoints from the config.
+  async function retryReceipt(tx, attempts = 3, gapMs = 2000) {
     let last = null;
-    for (let n = 0; n < attempts; n++) {
+    for (const nodeUrl of net.rpc) {
+      let provider;
       try {
-        const r = await provider.getTransactionReceipt(tx);
-        if (r) return r;
-      } catch (e) {
-        last = e;
+        provider = await connect([nodeUrl]);
+      } catch {
+        continue;
       }
-      if (n < attempts - 1) await new Promise((r) => setTimeout(r, gapMs));
+      for (let n = 0; n < attempts; n++) {
+        try {
+          const r = await provider.getTransactionReceipt(tx);
+          if (r) return r;
+        } catch (e) {
+          last = e;
+        }
+        if (n < attempts - 1) await new Promise((r) => setTimeout(r, gapMs));
+      }
     }
-    throw last ?? new Error("receipt unavailable");
+    throw last ?? new Error("receipt unavailable across all RPC endpoints");
   }
 
   // Wallet APIs return amounts as plain decimal strings (e.g. "500000000000000000");
@@ -397,9 +406,8 @@ export default function ExecutePanel({
     const tx = legs[i]?.shieldTx;
     setBusy(`check-shield-${i}`);
     try {
-      const provider = await connect(net.rpc);
       if (tx) {
-        const receipt = await retryReceipt(provider, tx);
+        const receipt = await retryReceipt(tx);
         if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending, no block yet.`, "info");
       } else {
         // No hash on record (e.g. a timed-out submission). Recover by asking
@@ -440,7 +448,7 @@ export default function ExecutePanel({
         } catch {}
         if (found) {
           patch(i, { shieldTx: found });
-          const receipt = await retryReceipt(provider, found);
+          const receipt = await retryReceipt(found);
           if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending, no block yet.`, "info");
         } else {
           say(
@@ -550,8 +558,7 @@ export default function ExecutePanel({
     if (!tx) return;
     setBusy(`check-invest-${i}`);
     try {
-      const provider = await connect(net.rpc);
-      const receipt = await retryReceipt(provider, tx);
+      const receipt = await retryReceipt(tx);
       if (!acceptInvestReceipt(i, receipt)) say(`Piece ${i + 1} vault receipt still pending.`, "info");
     } catch (e) {
       if (/revert/i.test(e.message)) {
