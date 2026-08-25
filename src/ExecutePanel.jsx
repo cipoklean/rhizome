@@ -158,11 +158,11 @@ export default function ExecutePanel({
       const cap = await checkStrk20Support(wallet);
       setSupport(cap);
       if (!cap.supported) {
-        say(`${wallet.name} needs Wallet API ${cap.minimumVersion} or newer — it reports ${cap.versions.join(", ") || "unknown"}.`, "err");
+        say(`${wallet.name} needs Wallet API ${cap.minimumVersion} or newer; it reports ${cap.versions.join(", ") || "unknown"}.`, "err");
         return;
       }
       phase = "authorization";
-      say(`Opening ${wallet.name} — approve Rhizome…`);
+      say(`Opening ${wallet.name}, approve Rhizome…`);
       let acc = await connectWallet(wallet, net.rpc[0]);
       say(`${wallet.name} approved.`, "ok");
       phase = "network switch";
@@ -225,7 +225,7 @@ export default function ExecutePanel({
       await requireSelectedChain();
       await dryRun(account, shieldActionsFor(schedule[0]));
       setShieldDryRun(true);
-      say("Free test passed — your wallet can hide this amount. Real move unlocked.", "ok");
+      say("Free test passed: your wallet can hide this amount. Real move unlocked.", "ok");
     } catch (e) {
       setShieldDryRun(false);
       say(`Free test failed: ${e.message}`, "err");
@@ -246,7 +246,7 @@ export default function ExecutePanel({
       await requireSelectedChain();
       await dryRun(account, actions);
       setDirectVaultPassed(true);
-      say(`Free vault test passed for ${strk(amount)} STRK — no fee, no transaction sent.`, "ok");
+      say(`Free vault test passed for ${strk(amount)} STRK: no fee, no transaction sent.`, "ok");
     } catch (e) {
       setDirectVaultPassed(false);
       say(`Vault test failed: ${e.message}`, "err");
@@ -263,13 +263,50 @@ export default function ExecutePanel({
     return true;
   }
 
+  // First condition blocking paid moves, phrased for the person clicking.
+  // Used by both the click handlers (so a click always explains itself) and
+  // nowhere else — buttons stay clickable so dead clicks are impossible.
+  const gateBlocker = () => {
+    if (!account) return "connect your wallet in Step 1";
+    if (!shieldDryRun) return "run the free test in Step 3 first";
+    if (!paidSubmissionAllowed) return paidSubmissionReason ?? "paid moves are not available for this plan";
+    if (!feePlan) return "the live fee is not known yet";
+    if (!feePlan.balanceKnown)
+      return "your wallet has not shared hidden balances, so the fee reserve cannot be verified. Reconnect in Step 1 and approve the balance prompt";
+    if (feePlan.reserveShortfall > 0n)
+      return `the hidden fee reserve is short by ${strk(feePlan.reserveShortfall)} STRK. Hide ${strk(feePlan.bootstrapDeposit)} STRK extra first (Step 2 explains why)`;
+    return null;
+  };
+
+  function shieldClick(i) {
+    const blocker = gateBlocker();
+    if (blocker) {
+      say(`Hide is locked for piece ${i + 1}: ${blocker}.`, "err");
+      return;
+    }
+    shield(i);
+  }
+
+  function investClick(i) {
+    const blocker = gateBlocker();
+    if (blocker) {
+      say(`Vault move is locked for piece ${i + 1}: ${blocker}.`, "err");
+      return;
+    }
+    if (!legs[i]?.investDryRun) {
+      say(`Piece ${i + 1}: run "test vault" before entering.`, "err");
+      return;
+    }
+    invest(i);
+  }
+
   async function shield(i) {
     if (!account || !shieldDryRun || !paidGateOpen) return;
     setBusy(`shield-${i}`);
     patch(i, { stage: "shielding" });
     try {
       await requireSelectedChain();
-      say(`Piece ${i + 1}: hiding ${strk(schedule[i].amount)} STRK — approve in wallet (2 prompts).`);
+      say(`Piece ${i + 1}: hiding ${strk(schedule[i].amount)} STRK, approve in wallet (2 prompts).`);
       const { transaction_hash } = await execute(account, shieldActionsFor(schedule[i]));
       // The wallet accepted the submission — from here on this leg is checkable,
       // never "failed", no matter what happens while waiting for the receipt.
@@ -278,7 +315,7 @@ export default function ExecutePanel({
       const provider = await connect(net.rpc);
       const result = await confirm(provider, transaction_hash);
       if (!result.confirmed || !acceptShieldReceipt(i, result.receipt)) {
-        say(`Piece ${i + 1} sent but not yet on-chain. Clock hasn't started — use Check.`, "info");
+        say(`Piece ${i + 1} sent but not yet on-chain. Clock hasn't started; use Check.`, "info");
       }
     } catch (e) {
       if (e?.code === "EXECUTE_TIMEOUT") {
@@ -305,7 +342,7 @@ export default function ExecutePanel({
       const provider = await connect(net.rpc);
       if (tx) {
         const receipt = await provider.getTransactionReceipt(tx);
-        if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending — no block yet.`, "info");
+        if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending, no block yet.`, "info");
       } else {
         // No hash on record (e.g. a timed-out submission). Recover by asking
         // the wallet for its recent invokes and matching this schedule's
@@ -321,7 +358,7 @@ export default function ExecutePanel({
         if (found) {
           patch(i, { shieldTx: found });
           const receipt = await provider.getTransactionReceipt(found);
-          if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending — no block yet.`, "info");
+          if (!acceptShieldReceipt(i, receipt)) say(`Piece ${i + 1} still pending, no block yet.`, "info");
         } else {
           say(
             `No transaction hash stored for piece ${i + 1}. Paste its hash from your wallet/explorer into the box below to link it.`,
@@ -381,7 +418,7 @@ export default function ExecutePanel({
     }
     setHashPrompt(null);
     setHashInput("");
-    say(`Piece ${target.index + 1} linked to ${value} — press Check.`, "ok");
+    say(`Piece ${target.index + 1} linked to ${value}; press Check.`, "ok");
   }
 
   async function invest(i) {
@@ -434,7 +471,7 @@ export default function ExecutePanel({
   const paidGateReason = !paidSubmissionAllowed
     ? paidSubmissionReason ?? "Not available for this plan."
     : !feePlan
-      ? "Live fee not known — can't check reserve."
+      ? "Live fee not known; can't check reserve."
       : !feePlan.balanceKnown
         ? "Connect your wallet and let it share hidden balances to check the fee reserve."
         : feePlan.reserveShortfall > 0n
@@ -454,9 +491,14 @@ export default function ExecutePanel({
     const leg = legs[i] ?? {};
     if (leg.stage === "invested") return { label: "in vault ✓", done: true };
     if (leg.stage === "invest-pending") return { label: "entering vault…", done: false };
-    // A submitted-but-unconfirmed hide is checkable, never a dead end.
-    if (!leg.shieldedAt && leg.shieldTx) {
-      return { label: "hiding… check receipt", done: false, pendingShield: true };
+    // A submitted-but-unconfirmed hide is checkable, never a dead end —
+    // with or without a stored hash (wallets can drop the answer entirely).
+    if (!leg.shieldedAt && (leg.shieldTx || leg.stage === "shield-pending")) {
+      return {
+        label: leg.shieldTx ? "hiding… check receipt" : "sent, proof missing: check or link hash",
+        done: false,
+        pendingShield: true,
+      };
     }
     if (leg.stage === "failed") return { label: "failed", done: false, retryable: true };
     if (!leg.shieldedAt) {
@@ -477,12 +519,12 @@ export default function ExecutePanel({
   return (
     <section className="band">
       <p className="eyebrow">
-        <b>◢</b> EXECUTE — 4 STEPS
+        <b>◢</b> EXECUTE · 4 STEPS
       </p>
       <h2>From visible to private.</h2>
       <p className="lede">
         Each piece takes two moves: <b>hide it</b>, wait a little so no one can pair the timing, then{" "}
-        <b>enter the vault</b>. Rhizome only describes the moves — your wallet holds the keys and does
+        <b>enter the vault</b>. Rhizome only describes the moves; your wallet holds the keys and does
         the proving.
         {feePlan && <> This plan is {feePlan.legCount} piece{feePlan.legCount === 1 ? "" : "s"} · fee {strk(feePlan.executionFees)} STRK to hide.</>}
         {delay && !isRehearsal && <> Wait {formatDelay(delayBlocks, secondsPerBlock)} between hide and vault.</>}
@@ -490,7 +532,7 @@ export default function ExecutePanel({
 
       {!deployed && (
         <p className="err" style={{ marginTop: 18 }}>
-          Vault not set up on {network} — hiding still works, entering the vault needs the helper.
+          Vault not set up on {network}: hiding still works, entering the vault needs the helper.
         </p>
       )}
 
@@ -539,7 +581,7 @@ export default function ExecutePanel({
             )}
             {wallets && !ready && <p className="status" style={{ marginTop: 8 }}>Approve Rhizome in your wallet to continue.</p>}
             {block != null && <p className="status" style={{ marginTop: 6 }}>Current block {block.toLocaleString()} · wait {delayBlocks} blocks = {formatDelay(delayBlocks, secondsPerBlock)}</p>}
-            {isRehearsal && <p className="status" style={{ marginTop: 6, color: "var(--orange)" }}>Quick test skips the real wait — don&apos;t use it on mainnet.</p>}
+            {isRehearsal && <p className="status" style={{ marginTop: 6, color: "var(--orange)" }}>Quick test skips the real wait; don&apos;t use it on mainnet.</p>}
           </div>
         </div>
 
@@ -568,10 +610,10 @@ export default function ExecutePanel({
                 ) : feePlan.reserveShortfall > 0n ? (
                   <p className="err" style={{ marginTop: 8 }}>
                     Need {strk(feePlan.reserveShortfall)} more hidden STRK. Add {strk(feePlan.bootstrapDeposit)} (shortfall + 1 fee). Without it amounts would shrink to{" "}
-                    {feePlan.withoutReserveVaultAmounts.map((a) => strk(a)).join(" / ")} — breaking your cover.
+                    {feePlan.withoutReserveVaultAmounts.map((a) => strk(a)).join(" / ")}, breaking your cover.
                   </p>
                 ) : feePlan.balanceKnown ? (
-                  <p className="status" style={{ marginTop: 8, color: "var(--text)" }}>✓ Reserve verified — real moves unlocked.</p>
+                  <p className="status" style={{ marginTop: 8, color: "var(--text)" }}>✓ Reserve verified: real moves unlocked.</p>
                 ) : null}
                 {!ready && <p className="status" style={{ marginTop: 8 }}>Connect wallet first.</p>}
                 {paidGateReason && !paidGateOpen && <p className="err" style={{ marginTop: 8 }}>{paidGateReason}</p>}
@@ -585,7 +627,7 @@ export default function ExecutePanel({
         <div className={`wizard-step ${!ready || !schedule?.length ? "" : step3Done ? "done" : "active"}`}>
           <div className="badge">{step3Done ? "✓" : "3"}</div>
           <div>
-            <h4>Free test — no fee, no transaction</h4>
+            <h4>Free test: no fee, no transaction</h4>
             <p>Prove your wallet can do the moves before spending anything.</p>
             {!ready || !schedule?.length ? (
               <p className="status">{!ready ? "Connect wallet first." : analysisError ? `No plan: ${analysisError}` : "Pick an amount above."}</p>
@@ -594,7 +636,7 @@ export default function ExecutePanel({
                 <button type="button" className="chip" onClick={dryRunShield} disabled={busy === "dryrun-shield"} aria-pressed={shieldDryRun}>
                   {busy === "dryrun-shield" ? "testing…" : shieldDryRun ? "hide test passed ✓" : "Test hide (free) →"}
                 </button>
-                {scheduleSource === "sepolia-rehearsal" && <p className="status" style={{ marginTop: 8 }}>Practice amount {strk(schedule[0].amount)} — not a real recommendation.</p>}
+                {scheduleSource === "sepolia-rehearsal" && <p className="status" style={{ marginTop: 8 }}>Practice amount {strk(schedule[0].amount)}, not a real recommendation.</p>}
                 {!shieldDryRun && <p className="status" style={{ marginTop: 8 }}>You must pass this before Hide unlocks.</p>}
               </>
             )}
@@ -608,11 +650,11 @@ export default function ExecutePanel({
             <h4>Hide → wait → vault</h4>
             {schedule?.length > 0 ? (
               <p>
-                {schedule.length} piece{schedule.length === 1 ? "" : "s"} — each hidden amount stays exactly as shown so it keeps its cover. Wait{" "}
+                {schedule.length} piece{schedule.length === 1 ? "" : "s"}; each hidden amount stays exactly as shown so it keeps its cover. Wait{" "}
                 {formatDelay(delayBlocks, secondsPerBlock)} between hide and vault.
               </p>
             ) : (
-              <p className="status">No pieces yet — pick an amount.</p>
+              <p className="status">No pieces yet, pick an amount.</p>
             )}
 
             {ready && schedule?.length > 0 && (
@@ -645,15 +687,19 @@ export default function ExecutePanel({
                             <button
                               type="button"
                               className="chip"
-                              onClick={() => (state.shieldTx && !state.shieldedAt ? checkShield(i) : shield(i))}
-                              disabled={busy != null || Boolean(state.shieldedAt) || !paidGateOpen || (!state.shieldTx && !shieldDryRun)}
+                              onClick={() =>
+                                !state.shieldedAt && (state.shieldTx || state.stage === "shield-pending")
+                                  ? checkShield(i)
+                                  : shieldClick(i)
+                              }
+                              disabled={busy != null || Boolean(state.shieldedAt)}
                             >
-                              {!paidGateOpen ? "locked" : busy === `shield-${i}` ? "sending…" : busy === `check-shield-${i}` ? "checking…" : state.shieldedAt ? `block ${state.shieldedAt}` : state.shieldTx ? "check" : status.retryable ? "retry" : "hide"}
+                              {busy === `shield-${i}` ? "sending…" : busy === `check-shield-${i}` ? "checking…" : state.shieldedAt ? `block ${state.shieldedAt}` : state.shieldTx || state.stage === "shield-pending" ? "check" : status.retryable ? "retry" : "hide"}
                             </button>
                           </td>
                           <td>
                             {!state.shieldedAt ? (
-                              <span style={{ color: "var(--ghost)" }}>—</span>
+                              <span style={{ color: "var(--ghost)" }}></span>
                             ) : state.stage === "invest-pending" ? (
                               <button type="button" className="chip" onClick={() => checkInvest(i)} disabled={busy != null}>
                                 {busy === `check-invest-${i}` ? "checking…" : "check"}
@@ -661,12 +707,17 @@ export default function ExecutePanel({
                             ) : !status.ready ? (
                               <span style={{ color: "var(--faint)" }}>wait</span>
                             ) : !state.investDryRun ? (
-                              <button type="button" className="chip" onClick={() => dryRunInvest(i)} disabled={!deployed || busy != null}>
+                              <button type="button" className="chip" onClick={() => (deployed ? dryRunInvest(i) : say("Vault helper is not deployed on this network; hiding still works.", "err"))} disabled={busy != null}>
                                 {busy === `dryrun-invest-${i}` ? "testing…" : "test vault"}
                               </button>
                             ) : (
-                              <button type="button" className="chip" onClick={() => invest(i)} disabled={busy != null || state.stage === "invested" || !paidGateOpen}>
-                                {!paidGateOpen ? "locked" : busy === `invest-${i}` ? "sending…" : state.stage === "invested" ? "done ✓" : "enter vault"}
+                              <button
+                                type="button"
+                                className="chip"
+                                onClick={() => (state.stage === "invested" ? undefined : investClick(i))}
+                                disabled={busy != null}
+                              >
+                                {busy === `invest-${i}` ? "sending…" : state.stage === "invested" ? "done ✓" : "enter vault"}
                               </button>
                             )}
                           </td>
@@ -684,7 +735,7 @@ export default function ExecutePanel({
       {/* advanced / debug */}
       {ready && deployed && network === "sepolia" && (
         <details className="advanced">
-          <summary>Sepolia vault test — already-hidden funds</summary>
+          <summary>Sepolia vault test: already-hidden funds</summary>
           <p style={{ marginTop: 10, color: "var(--dim)", fontSize: 13 }}>
             Try the vault step alone with funds you already hid. Free, no transaction sent.
           </p>
@@ -729,7 +780,7 @@ export default function ExecutePanel({
               <tbody>
                 {(Array.isArray(balances) ? balances : []).map((b, i) => (
                   <tr key={i}>
-                    <td>{String(b.token ?? b[0] ?? "—").slice(0, 14)}…</td>
+                    <td>{String(b.token ?? b[0] ?? "…").slice(0, 14)}…</td>
                     <td>{strk(BigInt(b.balance ?? b[1] ?? 0))}</td>
                   </tr>
                 ))}

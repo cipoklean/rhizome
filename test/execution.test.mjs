@@ -54,6 +54,15 @@ test("a 'failed' label never buries a submitted transaction", () => {
   });
 });
 
+test("a pending hide without a hash survives the reload", () => {
+  // The wallet accepted the submission but its answer never reached us.
+  // The leg must stay pending (checkable / hash-linkable), not vanish into
+  // "not hidden yet" while the funds have already moved.
+  assert.deepEqual(sanitizeExecutionProgress({ 0: { stage: "shield-pending" } }, 1), {
+    0: { stage: "shield-pending", investDryRun: false },
+  });
+});
+
 test("execution progress keys separate accounts, networks, venues and schedules", () => {
   const base = {
     chainId: "0x1",

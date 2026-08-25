@@ -175,7 +175,13 @@ export default function App() {
   }, [analysis, network, state, positionText]);
 
   const strk = (v) => formatUnits(v, 18, { maxFractionDigits: 4 });
-  const maxCohort = Math.max(1, ...(stats?.popular ?? []).map((p) => p.entryCohort));
+  // Scale both bars by the strongest side of either direction. Exit cohorts can
+  // dwarf entry cohorts (an amount common going in may be rare coming out);
+  // scaling by entry alone pushes exit bars past 100% and through the border.
+  const maxCohort = Math.max(
+    1,
+    ...(stats?.popular ?? []).map((p) => Math.max(p.entryCohort, p.exitCohort ?? 0)),
+  );
 
   return (
     <div className="wrap">
@@ -186,7 +192,7 @@ export default function App() {
         <h1>Private yield without leaving a fingerprint.</h1>
         <p className="sub">
           The privacy pool hides <b>who</b> you are. It can&apos;t hide{" "}
-          <b>how much</b> you moved — and on mainnet, most amounts are unique enough to trace. Rhizome
+          <b>how much</b> you moved, and on mainnet, most amounts are unique enough to trace. Rhizome
           finds amounts that blend in, prices the fee to get there, and runs the trade.
         </p>
 
@@ -216,14 +222,14 @@ export default function App() {
         )}
         {state.status === "error" && (
           <p className="err" style={{ marginTop: 34 }}>
-            could not reach the pool — {state.message}
+            could not reach the pool: {state.message}
           </p>
         )}
 
         {state.status === "ready" && state.stale && (
           <p className="status" style={{ marginTop: 18 }}>
             <span className="dot" style={{ opacity: 0.5 }} />
-            {state.staleSource === "snapshot" ? "from snapshot — updating…" : "from cache — updating…"}
+            {state.staleSource === "snapshot" ? "from snapshot, updating…" : "from cache, updating…"}
           </p>
         )}
 
@@ -261,12 +267,12 @@ export default function App() {
                 {strk(state.fee)}
                 <small>STRK</small>
               </div>
-              <div className="note">flat — same no matter the size</div>
+              <div className="note">flat, same no matter the size</div>
             </div>
             <div className="cell">
               <div className="k">Past moves checked</div>
               <div className="v">
-                {stats ? (stats.deposits + stats.exits).toLocaleString() : "—"}
+                {stats ? (stats.deposits + stats.exits).toLocaleString() : "…"}
               </div>
               <div className="note">
                 {stats ? `${stats.deposits.toLocaleString()} in · ${stats.exits.toLocaleString()} out` : ""} ·
@@ -276,19 +282,19 @@ export default function App() {
             <div className="cell">
               <div className="k">Amounts used only once</div>
               <div className="v">
-                {stats?.entry ? stats.entry.pct.toFixed(1) : "—"}
+                {stats?.entry ? stats.entry.pct.toFixed(1) : "…"}
                 <small>%</small>
               </div>
               <div className="note">
                 {stats?.entry
-                  ? `${stats.entry.unique.toLocaleString()} of ${stats.entry.amounts.toLocaleString()} amounts are unique — easy to trace`
+                  ? `${stats.entry.unique.toLocaleString()} of ${stats.entry.amounts.toLocaleString()} amounts are unique, easy to trace`
                   : ""}
               </div>
             </div>
             <div className="cell">
               <div className="k">On the way out too</div>
               <div className="v">
-                {stats?.exit ? stats.exit.pct.toFixed(1) : "—"}
+                {stats?.exit ? stats.exit.pct.toFixed(1) : "…"}
                 <small>%</small>
               </div>
               <div className="note">
@@ -307,11 +313,11 @@ export default function App() {
         </p>
         <h2>The pool hides who. Not how much.</h2>
         <p className="lede">
-          Imagine the pool is a dark room. Everyone&apos;s deposits go in and withdrawals come out — but
+          Imagine the pool is a dark room. Everyone&apos;s deposits go in and withdrawals come out, but
           the amounts written on the door are still visible. If yours is the only <b>1,234.567</b>{" "}
           STRK in the room, it&apos;s you.{" "}
           <span className="mono" style={{ color: "var(--dim)", fontSize: 13 }}>
-            Rhizome only reads that public door — never your private keys.
+            Rhizome only reads that public door, never your private keys.
           </span>
         </p>
 
@@ -328,7 +334,7 @@ export default function App() {
             <div className="num">02</div>
             <h3>In ≠ out</h3>
             <p>
-              An amount can be common going in and rare going out. Rhizome checks both — the weaker
+              An amount can be common going in and rare going out. Rhizome checks both; the weaker
               side decides your safety.
             </p>
           </div>
@@ -344,7 +350,7 @@ export default function App() {
             <div className="num">04</div>
             <h3>Sometimes the answer is &ldquo;don&apos;t&rdquo;</h3>
             <p>
-              If the fee eats your position, Rhizome says so — instead of selling you a schedule that
+              If the fee eats your position, Rhizome says so instead of selling you a schedule that
               isn&apos;t worth it.
             </p>
           </div>
@@ -360,12 +366,12 @@ export default function App() {
           <p className="lede">
             A <b>cohort</b> = how many other people used the exact same amount. Bigger cohort = harder
             to single you out. Rhizome scores every amount on its <b>weaker side</b> (whichever is
-            smaller — going in or coming out). The two bars show the difference.
+            smaller: going in or coming out). The two bars show the difference.
             {stats.feeLegShare > 0 && (
               <>
                 {" "}
-                Fee reimbursements ({stats.feeLegShare.toFixed(1)}% of withdrawals) are excluded — they
-                would fake a huge cohort at exactly 6 STRK.
+                Fee reimbursements ({stats.feeLegShare.toFixed(1)}% of withdrawals) are excluded, so they
+                cannot fake a huge cohort at exactly the fee amount.
               </>
             )}
           </p>
@@ -410,7 +416,7 @@ export default function App() {
         <p className="eyebrow">
           <b>◢</b> YOUR PLAN
         </p>
-        <h2>How much to split — and what it costs.</h2>
+        <h2>How much to split, and what it costs.</h2>
         <p className="lede">
           Enter your total STRK. Rhizome finds a way to split it into popular amounts, prices the fee,
           and picks the cheapest split worth doing.
@@ -431,7 +437,7 @@ export default function App() {
             Network
             <select value={network} onChange={(e) => setNetwork(e.target.value)}>
               <option value="mainnet">mainnet</option>
-              <option value="sepolia">sepolia — free test run</option>
+              <option value="sepolia">sepolia: free test run</option>
             </select>
           </label>
           <div className="chips">
@@ -450,13 +456,13 @@ export default function App() {
         </div>
 
         <details className="advanced">
-          <summary>Advanced: fee model — which costs are shown</summary>
+          <summary>Advanced: fee model, which costs are shown</summary>
           <label className="field" style={{ marginTop: 14 }}>
             Fee model
             <select value={feeModel} onChange={(e) => setFeeModel(e.target.value)}>
               {Object.entries(FEE_MODELS).map(([key, m]) => (
                 <option key={key} value={key}>
-                  {m.txPerLeg}× — {m.label}
+                  {m.txPerLeg}× · {m.label}
                 </option>
               ))}
             </select>
@@ -468,7 +474,7 @@ export default function App() {
 
         {network !== "mainnet" && (
           <p className="status" style={{ marginTop: 12, color: "var(--orange)" }}>
-            Sepolia is for free practice — different fee, tiny traffic, fake amounts. Read the real
+            Sepolia is for free practice: different fee, tiny traffic, fake amounts. Read the real
             plan on mainnet, then rehearse it here.
           </p>
         )}
@@ -520,7 +526,7 @@ export default function App() {
                         <td>{strk(leg.amount)} STRK</td>
                         <td>
                           {leg.entryCohort} / {leg.exitKnown ? leg.exitCohort : "?"}
-                          {!leg.covered && <span className="pill">rare — easier to trace</span>}
+                          {!leg.covered && <span className="pill">rare, easier to trace</span>}
                         </td>
                       </tr>
                     ))}
@@ -570,30 +576,30 @@ export default function App() {
           <p className="eyebrow">
             <b>◢</b> TIMING
           </p>
-          <h2>Waiting is free — when others are moving.</h2>
+          <h2>Waiting is free, when others are moving.</h2>
           <p className="lede">
-            Splitting hides the <b>amount</b>. Waiting hides the <b>timing</b> — it only works if
+            Splitting hides the <b>amount</b>. Waiting hides the <b>timing</b>: it only works if
             someone else uses the pool while you wait. We checked the last{" "}
             {TIMING_SAMPLE_BLOCKS.toLocaleString()} blocks (~{formatDelay(TIMING_SAMPLE_BLOCKS, state.secondsPerBlock)}).
             The pool has {timing.total.toLocaleString()} moves ever, {timing.recent.toLocaleString()}{" "}
-            recently — old bursts don&apos;t count for today.
+            recently; old bursts don&apos;t count for today.
           </p>
 
           <div className={`verdict ${timing.rec.verdict}`}>
             <h3>
               {timing.rec.verdict === "delay-earns-it"
                 ? `Wait about ${formatDelay(timing.rec.window, state.secondsPerBlock)} between hiding and entering the vault.`
-                : "This pool is quiet — timing won't hide you much right now."}
+                : "This pool is quiet: timing won't hide you much right now."}
             </h3>
             <p>
               {timing.rec.verdict === "delay-earns-it"
                 ? `That's ${timing.rec.window.toLocaleString()} blocks. At that wait, a move usually has ${timing.rec.medianCohort} others nearby, alone only ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time.`
-                : `Even waiting ${formatDelay(timing.rec.window, state.secondsPerBlock)} leaves you alone ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time — the amount split is doing more work than the wait.`}
+                : `Even waiting ${formatDelay(timing.rec.window, state.secondsPerBlock)} leaves you alone ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time; the amount split is doing more work than the wait.`}
               {timing.floor && (
                 <>
                   {" "}
                   At the minimum {NOTE_MATURITY_BLOCKS} blocks you&apos;re alone{" "}
-                  <b>{(timing.floor.aloneShare * 100).toFixed(0)}%</b> — paying the extra fee to split
+                  <b>{(timing.floor.aloneShare * 100).toFixed(0)}%</b>; paying the extra fee to split
                   and then going immediately buys almost nothing.
                 </>
               )}
@@ -652,9 +658,9 @@ export default function App() {
       />
 
       <footer>
-        <div className="meta">Rhizome reads only public pool data — never your private keys.</div>
+        <div className="meta">Rhizome reads only public pool data, never your private keys.</div>
         Your amounts and timing on the public door are visible by design. Rhizome makes the{" "}
-        fingerprint harder to match — it can&apos;t make the amount itself private, because the pool
+        fingerprint harder to match; it can&apos;t make the amount itself private, because the pool
         doesn&apos;t. <a href="https://github.com/cipoklean/rhizome">Source</a> ·{" "}
         <a href="https://strk20.starknet.io/hackathon">STRK20 Private Sprint</a>
       </footer>

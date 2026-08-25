@@ -83,13 +83,13 @@ export function sanitizeExecutionProgress(value, scheduleLength) {
     if (shieldedAt !== null && (stage === "shield-pending" || stage === "failed")) {
       stage = "shielded";
     }
-    // Conversely, a pending shield without a hash cannot be checked and must not
-    // disable a safe resubmission forever.
-    if (stage === "shield-pending" && !shieldTx) stage = undefined;
     // A "failed" verdict next to a submitted hash is not trustworthy — the
     // error may have struck after the wallet accepted the transaction. Demote
     // to a plain checkable leg and let the receipt decide.
     if (stage === "failed" && shieldTx) stage = undefined;
+    // A pending shield WITHOUT a hash stays too. It records a real submission
+    // attempt whose answer never reached us; dropping it used to make the UI
+    // claim "not hidden yet" after the funds had already moved.
 
     const clean = { investDryRun: false };
     if (stage) clean.stage = stage;

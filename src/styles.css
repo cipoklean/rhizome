@@ -309,6 +309,7 @@ section.band:first-of-type {
   background: var(--bg-2);
   border: 1px solid var(--line);
   position: relative;
+  overflow: hidden;
 }
 
 .bar-fill {
