@@ -471,7 +471,7 @@ export default function ExecutePanel({
     // Surface that as a clear message instead of letting the wallet surface
     // a generic UNKNOWN_ERROR.
     if (leg.shieldedAt != null && block != null) {
-      const maturityBlock = BigInt(leg.shieldedAt) + NOTE_MATURITY_BLOCKS;
+      const maturityBlock = BigInt(leg.shieldedAt) + BigInt(NOTE_MATURITY_BLOCKS);
       if (BigInt(block) < maturityBlock) {
         say(
           `Piece ${i + 1}: shielded funds are not spendable yet. Wait until block ${maturityBlock.toLocaleString()} (about ${formatDelay(Number(maturityBlock - BigInt(block)), secondsPerBlock)} from now).`,
@@ -541,7 +541,9 @@ export default function ExecutePanel({
   const blocksLeft = (i) => {
     const leg = legs[i];
     if (!leg?.shieldedAt || block == null) return null;
-    return Math.max(0, leg.shieldedAt + delayBlocks - block);
+    const maturityBlock = BigInt(leg.shieldedAt) + BigInt(delayBlocks);
+    if (BigInt(block) >= maturityBlock) return 0;
+    return maturityBlock - BigInt(block);
   };
 
   const legStatus = (i) => {
