@@ -409,6 +409,43 @@ export default function ExecutePanel({
               reason = `contract ${e.data?.contract_address?.slice(0, 10) ?? "?"}… reverted at ${sel}: ${e.data?.error ?? "no reason given"}`;
             }
           }
+          // Paymaster rejections nest the real error under .cause / .originalError
+          // (starknet.js PaymasterError / wallet wrappers). Walk the chain to find
+          // the deepest message — e.g. "Paymaster error 156: TRANSACTION_EXECUTION_ERROR".
+          let probe = e;
+          for (let i = 0; i < 6 && probe; i++) {
+            if (probe.cause && typeof probe.cause === "object" && probe.cause !== e) {
+              const m = probe.cause.message;
+              if (typeof m === "string" && m.length > 0) reason = m;
+              if (probe.cause.data && typeof probe.cause.data === "string") {
+                if (reason === e?.message) reason = probe.cause.data;
+              }
+              probe = probe.cause;
+            } else if (probe.originalError && typeof probe.originalError === "object" && probe.originalError !== e) {
+              const m = probe.originalError.message;
+              if (typeof m === "string" && m.length > 0) reason = m;
+              probe = probe.originalError;
+            } else if (probe.error && typeof probe.error === "object" && probe.error !== e) {
+              const m = probe.error.message;
+              if (typeof m === "string" && m.length > 0) reason = m;
+              probe = probe.error;
+            } else {
+              probe = null;
+            }
+          }
+          if (reason === e?.message && typeof e?.code === "number") {
+            reason = `${e.constructor?.name || "Error"} code ${e.code}: ${reason}`;
+          }
+          // Debug dump so the next failure reveals the full error shape.
+          if (typeof console !== "undefined") {
+            console.error("vault-fail error shape:", {
+              name: e?.constructor?.name,
+              message: e?.message,
+              code: e?.code,
+              data: e?.data,
+              causePresent: typeof e?.cause === "object" && e?.cause !== null,
+            });
+          }
         } catch {}
         say(`Piece ${i + 1} hide failed: ${reason}`, "err");
       }
@@ -574,6 +611,43 @@ export default function ExecutePanel({
                 : "unknown entry point";
               reason = `contract ${e.data?.contract_address?.slice(0, 10) ?? "?"}… reverted at ${sel}: ${e.data?.error ?? "no reason given"}`;
             }
+          }
+          // Paymaster rejections nest the real error under .cause / .originalError
+          // (starknet.js PaymasterError / wallet wrappers). Walk the chain to find
+          // the deepest message — e.g. "Paymaster error 156: TRANSACTION_EXECUTION_ERROR".
+          let probe = e;
+          for (let i = 0; i < 6 && probe; i++) {
+            if (probe.cause && typeof probe.cause === "object" && probe.cause !== e) {
+              const m = probe.cause.message;
+              if (typeof m === "string" && m.length > 0) reason = m;
+              if (probe.cause.data && typeof probe.cause.data === "string") {
+                if (reason === e?.message) reason = probe.cause.data;
+              }
+              probe = probe.cause;
+            } else if (probe.originalError && typeof probe.originalError === "object" && probe.originalError !== e) {
+              const m = probe.originalError.message;
+              if (typeof m === "string" && m.length > 0) reason = m;
+              probe = probe.originalError;
+            } else if (probe.error && typeof probe.error === "object" && probe.error !== e) {
+              const m = probe.error.message;
+              if (typeof m === "string" && m.length > 0) reason = m;
+              probe = probe.error;
+            } else {
+              probe = null;
+            }
+          }
+          if (reason === e?.message && typeof e?.code === "number") {
+            reason = `${e.constructor?.name || "Error"} code ${e.code}: ${reason}`;
+          }
+          // Debug dump so the next failure reveals the full error shape.
+          if (typeof console !== "undefined") {
+            console.error("vault-fail error shape:", {
+              name: e?.constructor?.name,
+              message: e?.message,
+              code: e?.code,
+              data: e?.data,
+              causePresent: typeof e?.cause === "object" && e?.cause !== null,
+            });
           }
         } catch {}
         say(`Piece ${i + 1} vault move failed: ${reason}`, "err");
