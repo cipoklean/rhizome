@@ -181,6 +181,7 @@ export default function App() {
   const maxCohort = Math.max(
     1,
     ...(stats?.popular ?? []).map((p) => Math.max(p.entryCohort, p.exitCohort ?? 0)),
+    ...(analysis?.rows ?? []).map((r) => r.minCohort),
   );
 
   return (
@@ -307,11 +308,11 @@ export default function App() {
         )}
       </header>
 
-      <section className="band">
+      <section className="band" aria-labelledby="why-heading">
         <p className="eyebrow">
           <b>◢</b> WHY THIS MATTERS
         </p>
-        <h2>The pool hides who. Not how much.</h2>
+        <h2 id="why-heading">The pool hides who. Not how much.</h2>
         <p className="lede">
           Imagine the pool is a dark room. Everyone&apos;s deposits go in and withdrawals come out, but
           the amounts written on the door are still visible. If yours is the only <b>1,234.567</b>{" "}
@@ -376,7 +377,7 @@ export default function App() {
             )}
           </p>
 
-          <div className="bars">
+          <div className="bars" aria-label="Popular amount cohorts: each row shows an amount, its entry-cohort bar (going in), and its exit-cohort bar (coming out)">
             {stats.popular.map((p) => (
               <div className="bar-row" key={p.amount.toString()}>
                 <div className="mono" style={{ fontSize: 13, color: "var(--dim)" }}>
