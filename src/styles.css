@@ -391,7 +391,26 @@ input[type="text"]:focus,
 select:focus {
   outline: none;
   border-color: var(--orange);
-  box-shadow: 0 0 0 1px rgba(197, 52, 0, 0.3);
+  box-shadow:
+    0 0 0 1px rgba(197, 52, 0, 0.3),
+    0 0 0 3px rgba(197, 52, 0, 0.15);
+}
+
+/* Visible focus ring for keyboard navigation — distinct from hover glow */
+.chip:focus-visible,
+button:focus-visible,
+details:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* The strip live-block button gets the same ring */
+.chip:focus {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
 }
 
 .chips {
@@ -430,7 +449,72 @@ select:focus {
   font-weight: 700;
 }
 
-/* ---------- table ---------- */
+/* ---------- mobile responsiveness (Area 1) ---------- */
+
+/* Inputs shrink on narrow screens so they don't push the layout past the edge */
+@media (max-width: 640px) {
+  input[type="text"] {
+    width: 100%;
+    max-width: 200px;
+  }
+
+  /* Preset chips wrap instead of overflowing on mobile */
+  .chips {
+    justify-content: flex-start;
+  }
+
+  /* Table first column sticks on horizontal scroll so row identity survives */
+  .table-wrap {
+    position: relative;
+  }
+
+  .table-wrap table th:first-child,
+  .table-wrap table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg-1);
+    z-index: 1;
+    box-shadow: 1px 0 0 var(--line);
+  }
+
+  .table-wrap tbody tr.chosen td:first-child {
+    box-shadow: 2px 0 0 var(--orange), 1px 0 0 var(--line);
+  }
+
+  /* Bar chart shrinks on mobile — SVG scales via viewBox, labels stay readable */
+  .bar-row {
+    gap: 8px;
+  }
+
+  .bar-row > div:first-child {
+    min-width: 60px;
+    font-size: 12px;
+  }
+
+  /* Fade hint: on very narrow screens, long cohort numbers get a tooltip-like
+     monospace wrap so they never overflow their cell */
+  .bar-stack > div:last-child .mono {
+    font-size: 11px;
+    word-break: break-all;
+  }
+}
+
+/* Touch targets: chips get enough padding on mobile for a finger */
+@media (pointer: coarse) {
+  .chip {
+    min-height: 44px;
+    padding: 10px 14px;
+  }
+}
+
+/* Hide the "refresh pool data" inline button on very narrow screens — it's
+   still reachable from the status line, just not inline */
+@media (max-width: 420px) {
+  .wrap > header > p:last-child button.chip {
+    width: 100%;
+    margin-top: 6px;
+  }
+}
 
 .table-wrap {
   margin-top: 30px;
@@ -557,19 +641,138 @@ tbody tr.chosen td:first-child {
 
 .chart .axis-label {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   fill: var(--faint);
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chart .tick {
   font-family: var(--mono);
   font-size: 10px;
   fill: var(--faint);
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-/* ---------- misc ---------- */
+/* ---------- skeleton loader ---------- */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-2) 0%,
+    var(--bg-1) 50%,
+    var(--bg-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius: 2px;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-line {
+  height: 14px;
+  margin-bottom: 10px;
+  width: 100%;
+}
+
+.skeleton-line:last-child {
+  width: 60%;
+  margin-bottom: 0;
+}
+
+.skeleton-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+/* ---------- error state with retry ---------- */
+
+.error-state {
+  border: 1px solid var(--orange);
+  background: rgba(197, 52, 0, 0.06);
+  padding: 20px 24px;
+  border-radius: 2px;
+}
+
+.error-state .err-title {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--orange);
+  margin: 0 0 8px;
+}
+
+.error-state .err-body {
+  color: var(--dim);
+  font-size: 14px;
+  margin: 0 0 14px;
+  max-width: 54ch;
+}
+
+.error-state .retry-btn {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 9px 16px;
+  background: var(--orange);
+  color: #fff;
+  border: 1px solid var(--orange);
+  border-radius: 2px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.error-state .retry-btn:hover {
+  background: var(--orange-d);
+  border-color: var(--orange-d);
+}
+
+/* ---------- loading skeleton for the hero ---------- */
+
+.hero-skeleton {
+  padding: clamp(60px, 12vh, 130px) 0 clamp(40px, 7vh, 80px);
+}
+
+.hero-skeleton h1-skel {
+  height: clamp(30px, 5.6vw, 62px);
+  width: 70%;
+  margin-bottom: 16px;
+}
+
+.hero-skeleton .skeleton-line {
+  height: 18px;
+  margin-bottom: 12px;
+}
+
+.hero-skeleton .skeleton-line:last-child {
+  width: 50%;
+}
+
+/* ---------- reduced motion override for skeleton ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background: var(--bg-1);
+  }
+}
 
 .status {
   font-family: var(--mono);

@@ -181,6 +181,7 @@ export default function App() {
   const maxCohort = Math.max(
     1,
     ...(stats?.popular ?? []).map((p) => Math.max(p.entryCohort, p.exitCohort ?? 0)),
+    ...(analysis?.rows ?? []).map((r) => r.minCohort),
   );
 
   return (
@@ -215,15 +216,20 @@ export default function App() {
         </div>
 
         {state.status === "loading" && (
-          <p className="status" style={{ marginTop: 34 }}>
-            <span className="dot" />
-            reading pool state…
-          </p>
+          <div className="hero-skeleton" aria-label="Loading pool data" role="status">
+            <div className="hero-skeleton h1-skel skeleton" />
+            <div className="skeleton-line" />
+            <div className="skeleton-line" />
+          </div>
         )}
         {state.status === "error" && (
-          <p className="err" style={{ marginTop: 34 }}>
-            could not reach the pool: {state.message}
-          </p>
+          <div className="error-state" role="alert">
+            <p className="err-title">Pool data unavailable</p>
+            <p className="err-body">{state.message}</p>
+            <button className="retry-btn" onClick={() => window.location.reload()}>
+              retry
+            </button>
+          </div>
         )}
 
         {state.status === "ready" && state.stale && (
@@ -307,11 +313,11 @@ export default function App() {
         )}
       </header>
 
-      <section className="band">
+      <section className="band" aria-labelledby="why-heading">
         <p className="eyebrow">
           <b>◢</b> WHY THIS MATTERS
         </p>
-        <h2>The pool hides who. Not how much.</h2>
+        <h2 id="why-heading">The pool hides who. Not how much.</h2>
         <p className="lede">
           Imagine the pool is a dark room. Everyone&apos;s deposits go in and withdrawals come out, but
           the amounts written on the door are still visible. If yours is the only <b>1,234.567</b>{" "}
@@ -376,7 +382,7 @@ export default function App() {
             )}
           </p>
 
-          <div className="bars">
+          <div className="bars" aria-label="Popular amount cohorts: each row shows an amount, its entry-cohort bar (going in), and its exit-cohort bar (coming out)">
             {stats.popular.map((p) => (
               <div className="bar-row" key={p.amount.toString()}>
                 <div className="mono" style={{ fontSize: 13, color: "var(--dim)" }}>
@@ -480,9 +486,20 @@ export default function App() {
         )}
 
         {!analysis && state.status === "ready" && (
-          <p className="status">no deposits for this token yet.</p>
+          <div className="error-state" role="status">
+            <p className="err-title">No pool data yet</p>
+            <p className="err-body">
+              We couldn&apos;t find deposit history for this token. Try a different token, or
+              switch to Sepolia to rehearse the flow with a free test run.
+            </p>
+          </div>
         )}
-        {analysis?.error && <p className="err">{analysis.error}</p>}
+        {analysis?.error && (
+          <div className="error-state" role="alert">
+            <p className="err-title">Analysis error</p>
+            <p className="err-body">{analysis.error}</p>
+          </div>
+        )}
 
         {analysis?.rows && (
           <>

@@ -649,11 +649,11 @@ export default function ExecutePanel({
       {/* ---- wizard ---- */}
       <div className="wizard">
         {/* STEP 1 */}
-        <div className={`wizard-step ${step1Done ? "done" : !wallets ? "active" : ready ? "done" : "active"}`}>
-          <div className="badge">{step1Done ? "✓" : "1"}</div>
-          <div>
-            <h4>Connect wallet</h4>
-            <p>We never see your keys. Your wallet does the hiding.</p>
+      <div className={`wizard-step ${wallets ? (ready ? "done" : "active") : wallets == null ? "active" : ""}`}>
+        <div className="badge">{ready ? "✓" : "1"}</div>
+        <div>
+          <h4>Connect wallet</h4>
+          <p>We never see your keys. Your wallet does the hiding.</p>
             <div className="controls" style={{ marginTop: 0 }}>
               {network === "sepolia" && (
                 <label className="field">

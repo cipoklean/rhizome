@@ -42,7 +42,9 @@ export default function FrontierChart({ rows, chosen }) {
 
   return (
     <div className="chart">
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Cost versus cover frontier">
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Cost versus cover frontier: each point is a split option; x is fee cost as a percent of your position, y is the weakest leg's cohort (log scale). The recommended split is highlighted in orange.">
+        <title>Cost versus cover frontier</title>
+        <desc>Scatter plot of split options. Each circle is one split configuration. Orange circle = recommended. Higher on the y-axis means more cohort cover; right on the x-axis means higher fee cost.</desc>
         {gridY.map((v) => (
           <g key={v}>
             <line
