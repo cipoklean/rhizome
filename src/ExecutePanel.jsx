@@ -397,7 +397,20 @@ export default function ExecutePanel({
         );
       } else {
         patch(i, { stage: "failed" });
-        say(`Piece ${i + 1} hide failed: ${e.message}`, "err");
+        let reason = e?.message ?? String(e);
+        try {
+          if (e?.data) {
+            if (typeof e.data === "string") reason = e.data;
+            else if (e.data.error) reason = e.data.error;
+            else if (e.data.contract_address) {
+              const sel = e.data?.selector
+                ? `selector ${e.data.selector.slice(0, 14)}…`
+                : "unknown entry point";
+              reason = `contract ${e.data?.contract_address?.slice(0, 10) ?? "?"}… reverted at ${sel}: ${e.data?.error ?? "no reason given"}`;
+            }
+          }
+        } catch {}
+        say(`Piece ${i + 1} hide failed: ${reason}`, "err");
       }
     } finally {
       setBusy(null);
@@ -550,7 +563,20 @@ export default function ExecutePanel({
         );
       } else {
         patch(i, { stage: "failed" });
-        say(`Piece ${i + 1} vault move failed: ${e.message}`, "err");
+        let reason = e?.message ?? String(e);
+        try {
+          if (e?.data) {
+            if (typeof e.data === "string") reason = e.data;
+            else if (e.data.error) reason = e.data.error;
+            else if (e.data.contract_address) {
+              const sel = e.data?.selector
+                ? `selector ${e.data.selector.slice(0, 14)}…`
+                : "unknown entry point";
+              reason = `contract ${e.data?.contract_address?.slice(0, 10) ?? "?"}… reverted at ${sel}: ${e.data?.error ?? "no reason given"}`;
+            }
+          }
+        } catch {}
+        say(`Piece ${i + 1} vault move failed: ${reason}`, "err");
       }
     } finally {
       setBusy(null);
