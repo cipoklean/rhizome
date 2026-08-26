@@ -663,7 +663,116 @@ tbody tr.chosen td:first-child {
   stroke-linejoin: round;
 }
 
-/* ---------- misc ---------- */
+/* ---------- skeleton loader ---------- */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-2) 0%,
+    var(--bg-1) 50%,
+    var(--bg-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius: 2px;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-line {
+  height: 14px;
+  margin-bottom: 10px;
+  width: 100%;
+}
+
+.skeleton-line:last-child {
+  width: 60%;
+  margin-bottom: 0;
+}
+
+.skeleton-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+/* ---------- error state with retry ---------- */
+
+.error-state {
+  border: 1px solid var(--orange);
+  background: rgba(197, 52, 0, 0.06);
+  padding: 20px 24px;
+  border-radius: 2px;
+}
+
+.error-state .err-title {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--orange);
+  margin: 0 0 8px;
+}
+
+.error-state .err-body {
+  color: var(--dim);
+  font-size: 14px;
+  margin: 0 0 14px;
+  max-width: 54ch;
+}
+
+.error-state .retry-btn {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 9px 16px;
+  background: var(--orange);
+  color: #fff;
+  border: 1px solid var(--orange);
+  border-radius: 2px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.error-state .retry-btn:hover {
+  background: var(--orange-d);
+  border-color: var(--orange-d);
+}
+
+/* ---------- loading skeleton for the hero ---------- */
+
+.hero-skeleton {
+  padding: clamp(60px, 12vh, 130px) 0 clamp(40px, 7vh, 80px);
+}
+
+.hero-skeleton h1-skel {
+  height: clamp(30px, 5.6vw, 62px);
+  width: 70%;
+  margin-bottom: 16px;
+}
+
+.hero-skeleton .skeleton-line {
+  height: 18px;
+  margin-bottom: 12px;
+}
+
+.hero-skeleton .skeleton-line:last-child {
+  width: 50%;
+}
+
+/* ---------- reduced motion override for skeleton ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background: var(--bg-1);
+  }
+}
 
 .status {
   font-family: var(--mono);

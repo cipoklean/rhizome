@@ -216,15 +216,20 @@ export default function App() {
         </div>
 
         {state.status === "loading" && (
-          <p className="status" style={{ marginTop: 34 }}>
-            <span className="dot" />
-            reading pool state…
-          </p>
+          <div className="hero-skeleton" aria-label="Loading pool data" role="status">
+            <div className="hero-skeleton h1-skel skeleton" />
+            <div className="skeleton-line" />
+            <div className="skeleton-line" />
+          </div>
         )}
         {state.status === "error" && (
-          <p className="err" style={{ marginTop: 34 }}>
-            could not reach the pool: {state.message}
-          </p>
+          <div className="error-state" role="alert">
+            <p className="err-title">Pool data unavailable</p>
+            <p className="err-body">{state.message}</p>
+            <button className="retry-btn" onClick={() => window.location.reload()}>
+              retry
+            </button>
+          </div>
         )}
 
         {state.status === "ready" && state.stale && (
@@ -481,9 +486,20 @@ export default function App() {
         )}
 
         {!analysis && state.status === "ready" && (
-          <p className="status">no deposits for this token yet.</p>
+          <div className="error-state" role="status">
+            <p className="err-title">No pool data yet</p>
+            <p className="err-body">
+              We couldn&apos;t find deposit history for this token. Try a different token, or
+              switch to Sepolia to rehearse the flow with a free test run.
+            </p>
+          </div>
         )}
-        {analysis?.error && <p className="err">{analysis.error}</p>}
+        {analysis?.error && (
+          <div className="error-state" role="alert">
+            <p className="err-title">Analysis error</p>
+            <p className="err-body">{analysis.error}</p>
+          </div>
+        )}
 
         {analysis?.rows && (
           <>
