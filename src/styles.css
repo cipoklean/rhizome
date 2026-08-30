@@ -813,6 +813,107 @@ footer .meta {
   color: var(--ghost);
 }
 
+/* ---------- dry-run success chip ---------- */
+
+.dry-run-chip {
+  opacity: 1;
+}
+
+@keyframes dryRunPass {
+  0% { opacity: 0; transform: translateY(3px); }
+  15% { opacity: 1; transform: translateY(0); }
+  70% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(0); }
+}
+
+/* ---------- keyboard help overlay ---------- */
+
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 24px;
+  animation: helpFade 0.18s ease-out;
+}
+
+.help-card {
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  max-width: 460px;
+  width: 100%;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 22px 24px;
+  font-family: var(--body);
+}
+
+.help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.help-card h3 {
+  font-family: var(--display);
+  font-size: 18px;
+  margin: 0;
+}
+
+.help-card h4 {
+  font-family: var(--body);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 18px 0 6px;
+}
+
+.help-card ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13.5px;
+  color: var(--dim);
+  line-height: 1.6;
+}
+
+.help-card dl {
+  margin: 0;
+}
+
+.help-card dt {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 14px;
+  margin-top: 10px;
+}
+
+.help-card dd {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  color: var(--dim);
+  line-height: 1.55;
+}
+
+.help-card kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+@keyframes helpFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

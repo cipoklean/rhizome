@@ -125,6 +125,39 @@ export default function App() {
     return { rows, rec: recommend(rows), position };
   }, [state, positionText, feeModel]);
 
+  // Keep the verdict area from flashing empty while the frontier recomputes on
+  // a heavy input change. The memo runs synchronously, so we flip a flag for
+  // the frame(s) the inputs are settling, then clear it.
+  const [computing, setComputing] = useState(false);
+  useEffect(() => {
+    setComputing(true);
+    const id = setTimeout(() => setComputing(false), 120);
+    return () => clearTimeout(id);
+  }, [state, positionText, feeModel]);
+
+  // Keyboard help overlay. "?" opens it; Esc closes. Ignore "?" typed into any
+  // form field so it still types a question mark there.
+  const [helpOpen, setHelpOpen] = useState(false);
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") {
+        setHelpOpen(false);
+        return;
+      }
+      if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const t = e.target;
+        const tag = t?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) {
+          return;
+        }
+        e.preventDefault();
+        setHelpOpen((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const executionPlan = useMemo(() => {
     const recommended = analysis?.rec?.schedule;
     if (recommended?.length) {
@@ -312,6 +345,16 @@ export default function App() {
             </div>
           </div>
         )}
+        <button
+          type="button"
+          className="chip help-trigger"
+          aria-haspopup="dialog"
+          aria-expanded={helpOpen}
+          onClick={() => setHelpOpen((v) => !v)}
+          style={{ marginTop: 12, fontSize: 10 }}
+        >
+          ? shortcuts & glossary
+        </button>
       </header>
 
       <section className="band" aria-labelledby="why-heading">
@@ -506,6 +549,12 @@ export default function App() {
           </div>
         )}
 
+        {computing && (
+          <p className="computing" style={{ direction: "ltr", fontSize: 12, color: "var(--faint)", marginTop: 8 }}>
+            computing…
+          </p>
+        )}
+
         {analysis?.rows && (
           <>
             <div className={`verdict ${analysis.rec.verdict}`}>
@@ -698,6 +747,42 @@ export default function App() {
         doesn&apos;t. <a href="https://github.com/cipoklean/rhizome">Source</a> ·{" "}
         <a href="https://strk20.starknet.io/hackathon">STRK20 Private Sprint</a>
       </footer>
+
+      {helpOpen && (
+        <div
+          className="help-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Shortcuts and glossary"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setHelpOpen(false);
+          }}
+        >
+          <div className="help-card">
+            <div className="help-head">
+              <h3>Shortcuts & glossary</h3>
+              <button type="button" className="chip" onClick={() => setHelpOpen(false)} aria-label="Close">
+                Esc
+              </button>
+            </div>
+            <h4>Shortcuts</h4>
+            <ul>
+              <li><kbd>?</kbd> open / close this panel</li>
+              <li><kbd>Esc</kbd> close this panel</li>
+              <li>Use the number-input arrows on any amount field for quick steps.</li>
+            </ul>
+            <h4>Glossary</h4>
+            <dl>
+              <dt>Cohort</dt>
+              <dd>How many other people used the exact same amount. Bigger cohort = harder to single you out. Rhizome scores every amount on its weaker side (whichever is smaller: going in or coming out).</dd>
+              <dt>Distinctiveness</dt>
+              <dd>How unique your amount is versus the crowd. 0 is invisible, 1 is a one-of-a-kind fingerprint. Lower is better; Rhizome targets 0.05 or below.</dd>
+              <dt>Frontier</dt>
+              <dd>The cost/unlinkability trade-off: every way to split your position into tranches, scored by cohort cover and total pool fees. The plan picks the cheapest split that reaches good cover.</dd>
+            </dl>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

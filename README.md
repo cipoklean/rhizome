@@ -217,6 +217,48 @@ variant has been removed; the exact request remains visible in the UI for free r
 - `@starknet-io/get-starknet-discovery` / `-wallet-standard` 6.0.3, `@starknet-io/types-js` 0.10.3
 - A Cairo `privacy_invoke` anonymizer contract (owned and reviewed here, not audited)
 
+## How to run
+
+```bash
+npm install
+npm run dev        # local dev server (Vite)
+npm run build      # production build to dist/
+npm test           # node --test on the privacy/execution/timing/wallet suites
+```
+
+The dapp is client-only: it reads public pool data over RPC and never holds a
+private key. Point it at `?network=sepolia` for the free rehearsal path.
+
+## How to demo
+
+1. Open the app. The hero states the value in one line: amounts are picked to
+   match what others already deposited, so your move hides in the crowd.
+2. Enter an amount (or use a preset). The verdict card shows the recommended
+   split, the fee, and how many others share your weakest leg.
+3. Press `?` for the shortcuts + glossary (cohort / distinctiveness / frontier).
+4. Step 3 runs a free wallet dry run (no fee, no transaction). On success a
+   transient `✓ passed` chip appears. Real Hide unlocks only after it passes.
+5. If the RPC is down, the status banner says so plainly and still shows the
+   last snapshot — planning works, execution re-checks live data on connect.
+
+## Post-hackathon / deferred
+
+Engineering notes only — items intentionally not shipped in the hackathon build:
+
+- **M1-5 cohort consolidation** — guardrail abort: making `roundTripCohort` the
+  single source of truth changed per-leg vs aggregate scoring and diverged 9
+  tests; reverted rather than risk the privacy math.
+- **M1-3 `@ts-check`** — dropped for the `.mjs` pipeline (esbuild treats the
+  pragma as a syntax error under this Node config); JSDoc typedefs retained.
+- **M1-7 cache/snapshot versioning** — pool cache and shipped snapshot are not
+  versioned; a schema change would silently misread old blobs.
+- **M2-3 RPC retry/backoff** — a single timeout fails the load; no retry or
+  exponential backoff on transient RPC errors.
+- **M2-6 chart accessibility** — the cohort bars have aria-labels but no
+  keyboard-navigable data table or sonification for screen readers.
+- **M2-7 cron `no_agent`** — the scheduled snapshot job must not spin up an
+  agent loop; documented so a future cron wiring does not enable one.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

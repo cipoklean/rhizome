@@ -49,6 +49,7 @@ export default function ExecutePanel({
   const [busy, setBusy] = useState(null);
   const [log, setLog] = useState([]);
   const [shieldDryRun, setShieldDryRun] = useState(false);
+  const [dryRunPassTick, setDryRunPassTick] = useState(0);
   const [block, setBlock] = useState(null);
   const [delayMode, setDelayMode] = useState(network === "sepolia" ? "rehearsal" : "measured");
   const [legs, setLegs] = useState({});
@@ -227,6 +228,7 @@ export default function ExecutePanel({
       await requireSelectedChain();
       await dryRun(account, shieldActionsFor(schedule[0]));
       setShieldDryRun(true);
+      setDryRunPassTick((t) => t + 1);
       say("Free test passed: your wallet can hide this amount. Real move unlocked.", "ok");
     } catch (e) {
       setShieldDryRun(false);
@@ -861,6 +863,22 @@ export default function ExecutePanel({
                 <button type="button" className="chip" onClick={dryRunShield} disabled={busy === "dryrun-shield"} aria-pressed={shieldDryRun}>
                   {busy === "dryrun-shield" ? "testing…" : shieldDryRun ? "hide test passed ✓" : "Test hide (free) →"}
                 </button>
+                {shieldDryRun && (
+                  <span
+                    key={dryRunPassTick}
+                    className="dry-run-chip"
+                    aria-hidden="true"
+                    style={{
+                      marginLeft: 8,
+                      fontSize: 12,
+                      color: "var(--text)",
+                      display: "inline-block",
+                      animation: "dryRunPass 1.5s ease-out forwards",
+                    }}
+                  >
+                    ✓ passed
+                  </span>
+                )}
                 {scheduleSource === "sepolia-rehearsal" && <p className="status" style={{ marginTop: 8 }}>Practice amount {strk(schedule[0].amount)}, not a real recommendation.</p>}
                 {!shieldDryRun && <p className="status" style={{ marginTop: 8 }}>You must pass this before Hide unlocks.</p>}
               </>
