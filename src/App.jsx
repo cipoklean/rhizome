@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import cfg from "../config/addresses.json";
+import { TIMING_SAMPLE_BLOCKS, NOTE_MATURITY_BLOCKS } from "../config/constants.mjs";
 import ExecutePanel from "./ExecutePanel.jsx";
 import { buildRehearsalFallback } from "./lib/execution.mjs";
 import FrontierChart from "./FrontierChart.jsx";
