@@ -192,28 +192,23 @@ export default function App() {
         </p>
         <h1>Private yield without leaving a fingerprint.</h1>
         <p className="sub">
-          The privacy pool hides <b>who</b> you are. It can&apos;t hide{" "}
-          <b>how much</b> you moved, and on mainnet, most amounts are unique enough to trace. Rhizome
-          finds amounts that blend in, prices the fee to get there, and runs the trade.
+          Rhizome picks STRK amounts that match what hundreds of others already deposited — so your move hides in the crowd.
         </p>
-
         <div className="how">
           <span className="how-step">
-            <b>1</b> Pick a popular amount
+            <b>1</b> · Pick a crowd-sized amount
           </span>
           <span className="how-arrow">→</span>
           <span className="how-step">
-            <b>2</b> Split privately
+            <b>2</b> · Pay the privacy fee
           </span>
           <span className="how-arrow">→</span>
           <span className="how-step">
-            <b>3</b> Wait a little
-          </span>
-          <span className="how-arrow">→</span>
-          <span className="how-step">
-            <b>4</b> Enter the vault
+            <b>3</b> · Wait for timing cover, then vault
           </span>
         </div>
+
+
 
         {state.status === "loading" && (
           <div className="hero-skeleton" aria-label="Loading pool data" role="status">
@@ -223,21 +218,28 @@ export default function App() {
           </div>
         )}
         {state.status === "error" && (
-          <div className="error-state" role="alert">
-            <p className="err-title">Pool data unavailable</p>
-            <p className="err-body">{state.message}</p>
-            <button className="retry-btn" onClick={() => window.location.reload()}>
-              retry
-            </button>
-          </div>
-        )}
+                  <div className="error-state" role="alert">
+                    <p className="err-title">Unable to reach Starknet RPC at {cfg[network].rpc[0]}.</p>
+                    <p className="err-body">Check your connection, Retry, or switch to Sepolia.</p>
+                    <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                      <button className="chip" onClick={() => window.location.reload()} style={{ flex: 1 }}>Retry</button>
+                      <button className="chip" style={{ flex: 1 }}>Switch to Sepolia</button>
+                    </div>
+                  </div>
+                )}
 
         {state.status === "ready" && state.stale && (
-          <p className="status" style={{ marginTop: 18 }}>
-            <span className="dot" style={{ opacity: 0.5 }} />
-            {state.staleSource === "snapshot" ? "from snapshot, updating…" : "from cache, updating…"}
-          </p>
-        )}
+                  <p className="status" style={{ marginTop: 18, direction: "ltr" }} role="status">
+                    <span className="dot" style={{ opacity: 0.5 }} />
+                    {state.source === "snapshot"
+                      ? "Live RPC unavailable — showing pool snapshot from " + new Date(state.fetchedAt).toLocaleDateString() + ". Planning still works; execution re-checks live data when you connect."
+                      : state.source === "cache"
+                        ? "Cached data · fetched " + Math.floor((Date.now() - state.fetchedAt) / 60000) + " min ago — live tail fetch failed."
+                        : state.source === "live"
+                          ? "Live Starknet data · block " + state.block.toLocaleString()
+                          : "from " + state.staleSource + ", updating…"}
+                  </p>
+                )}
 
         {state.status === "ready" && !state.stale && state.block > 0 && (
           <p className="status" style={{ marginTop: 8, fontSize: 11 }}>
@@ -435,6 +437,7 @@ export default function App() {
               type="text"
               inputMode="decimal"
               value={positionText}
+              autoFocus
               onChange={(e) => setPositionText(e.target.value)}
               aria-label="Position in STRK"
             />
@@ -447,18 +450,21 @@ export default function App() {
             </select>
           </label>
           <div className="chips">
-            {PRESETS.map((p) => (
-              <button
-                key={p}
-                type="button"
-                className="chip"
-                aria-pressed={positionText === p}
-                onClick={() => setPositionText(p)}
-              >
-                {Number(p).toLocaleString()}
-              </button>
-            ))}
-          </div>
+                      {PRESETS.map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          className="chip"
+                          aria-pressed={positionText === p}
+                          onClick={() => setPositionText(p)}
+                        >
+                          {Number(p).toLocaleString()}
+                        </button>
+                      ))}
+                      <p className="ghost-text" style={{ fontSize: 11, color: "var(--dim)", marginTop: 4, direction: "ltr" }}>
+                        100 = very common · 1,000 = common · 5,000 = uncommon · 50,000 = rare
+                      </p>
+                    </div>
         </div>
 
         <details className="advanced">
@@ -467,10 +473,10 @@ export default function App() {
             Fee model
             <select value={feeModel} onChange={(e) => setFeeModel(e.target.value)}>
               {Object.entries(FEE_MODELS).map(([key, m]) => (
-                <option key={key} value={key}>
-                  {m.txPerLeg}× · {m.label}
-                </option>
-              ))}
+                              <option key={key} value={key} title={m.label}>
+                                {m.label} — {m.txPerLeg} tx per leg
+                              </option>
+                            ))}
             </select>
           </label>
           <p className="status" style={{ marginTop: 10 }}>
@@ -507,18 +513,30 @@ export default function App() {
               <h3>{VERDICTS[analysis.rec.verdict]?.title ?? analysis.rec.verdict}</h3>
               <p>{VERDICTS[analysis.rec.verdict]?.body}</p>
               <div className="facts">
-                <span className="tag hot">
-                  {analysis.rec.tranches === 1 ? "1 piece" : `${analysis.rec.tranches} pieces`}
-                </span>
-                <span className="tag">fee {strk(analysis.rec.feeCost)} STRK</span>
-                <span className="tag">
-                  {(analysis.rec.feeCostRatio * 100).toFixed(2)}% of your amount
-                </span>
-                <span className="tag">
-                  hides among {analysis.rec.minCohort} others at weakest
-                </span>
-              </div>
-              <p className="status" style={{ marginTop: 12 }}>
+                              <span className="tag hot">
+                                {analysis.rec.tranches === 1 ? "1 piece" : `${analysis.rec.tranches} pieces`}
+                              </span>
+                              <span className="tag">fee {strk(analysis.rec.feeCost)} STRK</span>
+                              <span className="tag">
+                                {(analysis.rec.feeCostRatio * 100).toFixed(2)}% of your amount
+                              </span>
+                              <span className="tag">
+                                hides among {analysis.rec.minCohort} others at weakest
+                              </span>
+                            </div>
+                            {analysis.rec.verdict === "position-too-small" && (
+                              <p className="verdict-guidance" style={{ direction: "ltr", marginTop: 8, fontSize: 11 }}>
+                                Fees would eat this position. Minimum ~10 STRK recommended — or{' '}
+                                <button
+                                  className="chip"
+                                  style={{ marginLeft: 4, fontSize: 10 }}
+                                  onClick={() => window.location.replace("?network=sepolia")}
+                                >
+                                  Switch to Sepolia
+                                </button>
+                              </p>
+                            )}
+                            <p className="status" style={{ marginTop: 12 }}>
                 Round trip (in + out): {strk(analysis.rec.roundTripFeeCost)} STRK (
                 {(analysis.rec.roundTripFeeCostRatio * 100).toFixed(2)}%).
               </p>

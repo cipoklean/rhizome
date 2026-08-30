@@ -740,7 +740,17 @@ export default function ExecutePanel({
         {delay && !isRehearsal && <> Wait {formatDelay(delayBlocks, secondsPerBlock)} between hide and vault.</>}
       </p>
 
-      {!deployed && (
+            {ready && (
+              <div className="persistent-error" style={{ marginTop: 12, direction: "ltr" }}>
+                {gatewayError != null && (
+                  <p className="err-title" style={{ color: "var(--error)" }}>
+                    {gatewayError}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {!deployed && (
         <p className="err" style={{ marginTop: 18 }}>
           Vault not set up on {network}: hiding still works, entering the vault needs the helper.
         </p>

@@ -47,6 +47,7 @@ function readCompactCache(network, token) {
       feeLegsCount: j.feeLegsCount ?? 0,
       compact: true,
       source: "cache",
+      fetchedAt: Date.now(),
     };
   } catch {
     return null;
@@ -98,6 +99,7 @@ async function loadShippedSnapshot(network) {
           feeLegsCount: typeof j.feeLegs === "number" ? j.feeLegs : null,
           compact: true,
           source: "snapshot",
+          fetchedAt: Date.now(),
         };
       }
       if (Array.isArray(j.deposits) && Array.isArray(j.withdrawals)) {
@@ -119,6 +121,7 @@ async function loadShippedSnapshot(network) {
           feeLegsCount: feeLegs.length,
           compact: true,
           source: "snapshot",
+          fetchedAt: Date.now(),
         };
       }
     } catch {}
@@ -132,7 +135,7 @@ function pickFreshest(snapshot, cached) {
   return cached.block > snapshot.block ? cached : snapshot;
 }
 
-/**
+/
  * Load public pool state for `network` with incremental tail fetch.
  *
  * @param {string} network    "mainnet" | "sepolia"
@@ -157,10 +160,7 @@ export async function loadPoolState(network, cfg, { onStale } = {}) {
   let provider;
   try {
     provider = await connect(net.rpc);
-  } catch (e) {
-    if (base) return { ...base, stale: false };
-    throw e;
-  }
+  } catch (e) {\n    if (base) return { ...base, source: "snapshot", stale: true, fetchedAt: Date.now() };\n    throw e;\n  }
 
   const fromBlock = base ? Math.max(0, base.block + 1) : 0;
   const [block, fee, liveFeeHistory] = await Promise.all([
@@ -200,8 +200,7 @@ export async function loadPoolState(network, cfg, { onStale } = {}) {
       fetchWithdrawals(provider, net.strk20Pool, { token, fromBlock }),
     ]);
   } catch (e) {
-    // RPC tail failed — return stale live fee+block with base histograms, still usable
-    if (base) return { ...base, block, fee, feeHistory: mergedFeeHistory, stale: false };
+    // RPC tail failed — return cache source with stale=true\n    if (base) return { ...base, source: "cache", stale: true, fetchedAt: Date.now() };
     throw e;
   }
 
@@ -230,6 +229,7 @@ export async function loadPoolState(network, cfg, { onStale } = {}) {
     feeLegsCount: (base?.feeLegsCount ?? 0) + tailClass.feeLegs.length,
     source: "live",
     stale: false,
+    fetchedAt: Date.now(),
   };
 
   writeCompactCache(network, token, live);
