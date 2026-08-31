@@ -245,6 +245,11 @@ private key. Point it at `?network=sepolia` for the free rehearsal path.
 
 Engineering notes only — items intentionally not shipped in the hackathon build:
 
+- **Fee-note maturity** — fee notes must mature 10 blocks before the vault tx
+  can draw the fee; the free dry run simulates without charging the real fee
+  and cannot catch this. The app now guards it pre-flight (blocks the submit
+  with a live countdown) and maps paymaster error 156 to an honest
+  explanation with a Deep Simulate escape hatch.
 - **M1-5 cohort consolidation** — guardrail abort: making `roundTripCohort` the
   single source of truth changed per-leg vs aggregate scoring and diverged 9
   tests; reverted rather than risk the privacy math.

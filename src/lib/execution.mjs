@@ -141,6 +141,57 @@ export function buildRehearsalFallback({ amount, feeAmount, score = {} }) {
 
 
 /**
+ * Pre-flight spendability gate for the vault transaction.
+ *
+ * The pool spends two kinds of notes in one vault move: the position note(s)
+ * and the fee-reserve note that reimburses the fee router. Both must be at
+ * least `maturity` blocks old or `privacy.cairo` reverts — and because the
+ * free dry run simulates without charging the real fee, nothing before
+ * submission catches a young fee note.
+ *
+ * `knownBlocks` carries the creation block of every note the app knows about:
+ * each leg's `shieldedAt`, plus the latest hide's landing block as the bound
+ * for the fee note (the router draws from the newest shielded STRK first).
+ * `null` entries mean "age genuinely unknown" (hidden outside this app or
+ * before the tracking existed) — reported, never guessed.
+ */
+export function noteMaturityGate({ knownBlocks, currentBlock, maturity = 10 } = {}) {
+  if (!Number.isSafeInteger(currentBlock) || currentBlock < 0) {
+    return { ok: true, blocked: false, blocksRemaining: 0, unknownAges: [], reason: "current block unknown" };
+  }
+  const sources = Array.isArray(knownBlocks) ? knownBlocks : [];
+  const unknownAges = [];
+  let blocksRemaining = 0;
+  let youngestSource = null;
+
+  for (const [index, value] of sources.entries()) {
+    if (value === null || value === undefined) {
+      unknownAges.push(index);
+      continue;
+    }
+    const n = Number(value);
+    if (!Number.isSafeInteger(n) || n < 0) {
+      unknownAges.push(index);
+      continue;
+    }
+    const remaining = maturity + n - currentBlock;
+    if (remaining > blocksRemaining) {
+      blocksRemaining = remaining;
+      youngestSource = index;
+    }
+  }
+
+  return {
+    ok: blocksRemaining <= 0,
+    blocked: blocksRemaining > 0,
+    blocksRemaining,
+    youngestSource,
+    unknownAges,
+  };
+}
+
+
+/**
  * Derive the STRK reserve required to keep every analyzed public amount intact.
  *
  * Upstream `privacy.cairo` runs `collect_fee()` before `_apply_actions()`: the

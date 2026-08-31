@@ -5,6 +5,7 @@ import {
   buildFeeReservePlan,
   buildRehearsalFallback,
   executionProgressKey,
+  noteMaturityGate,
   readExecutionProgress,
   sanitizeExecutionProgress,
   writeExecutionProgress,
@@ -273,4 +274,70 @@ test("fee planning fails closed on invalid inputs and unknown or insufficient ba
   });
   assert.equal(insufficient.reserveShortfall, 1n);
   assert.equal(insufficient.paidSubmissionAllowed, false);
+});
+
+test("maturity gate blocks a young fee note and passes mature notes", () => {
+  const maturity = 10;
+  // Deterministic blocks: hide landed at 1000, current block 1005 -> 5 blocks short.
+  const young = noteMaturityGate({
+    knownBlocks: [1000],
+    currentBlock: 1005,
+    maturity,
+  });
+  assert.equal(young.blocked, true);
+  assert.equal(young.ok, false);
+  assert.equal(young.blocksRemaining, 5);
+
+  // Exactly mature (10 blocks later) passes, including the boundary.
+  const boundary = noteMaturityGate({ knownBlocks: [1000], currentBlock: 1010, maturity });
+  assert.equal(boundary.blocked, false);
+  assert.equal(boundary.ok, true);
+  assert.equal(boundary.blocksRemaining, 0);
+
+  // Old position note + young fee note: the youngest note decides.
+  const mixed = noteMaturityGate({
+    knownBlocks: [500, 1002],
+    currentBlock: 1008,
+    maturity,
+  });
+  assert.equal(mixed.blocked, true);
+  assert.equal(mixed.blocksRemaining, 4);
+  assert.equal(mixed.youngestSource, 1);
+
+  // All notes mature -> submit path allowed.
+  const mature = noteMaturityGate({
+    knownBlocks: [500, 990],
+    currentBlock: 1005,
+    maturity,
+  });
+  assert.equal(mature.blocked, false);
+  assert.equal(mature.ok, true);
+});
+
+test("maturity gate never guesses an unknown note age", () => {
+  const maturity = 10;
+  // Unknown age is reported, not treated as blocked or as mature.
+  const unknown = noteMaturityGate({
+    knownBlocks: [null, 500],
+    currentBlock: 1000,
+    maturity,
+  });
+  assert.deepEqual(unknown.unknownAges, [0]);
+  assert.equal(unknown.blocked, false);
+  assert.equal(unknown.ok, true);
+
+  // Unknown current block -> gate cannot judge, never blocks.
+  const noBlock = noteMaturityGate({ knownBlocks: [500], currentBlock: null });
+  assert.equal(noBlock.blocked, false);
+  assert.equal(noBlock.ok, true);
+  assert.equal(noBlock.reason, "current block unknown");
+
+  // Garbage values count as unknown, never as zero-age.
+  const garbage = noteMaturityGate({
+    knownBlocks: ["not-a-block", -1, 300],
+    currentBlock: 320,
+    maturity,
+  });
+  assert.deepEqual(garbage.unknownAges, [0, 1]);
+  assert.equal(garbage.blocked, false);
 });

@@ -3,6 +3,7 @@ import {
   acceptedReceiptBlock,
   buildFeeReservePlan,
   executionProgressKey,
+  noteMaturityGate,
   readExecutionProgress,
   writeExecutionProgress,
 } from "./lib/execution.mjs";
@@ -93,6 +94,15 @@ export default function ExecutePanel({
   const WAIT_OPTIONS = [NOTE_MATURITY_BLOCKS, 15, 20, 25, 30];
   const [legs, setLegs] = useState({});
   const [hydratedProgressKey, setHydratedProgressKey] = useState(null);
+  // Landing block of the most recent hide seen by this app (any leg). The fee
+  // router draws the vault fee from the newest shielded STRK, so this bounds
+  // the fee note's age. Null = hidden outside the app / before tracking.
+  const [reserveShieldedAt, setReserveShieldedAt] = useState(null);
+  // Persistent (not transient) vault failure card — paymaster 156 etc.
+  const [vaultMaturityCard, setVaultMaturityCard] = useState(null);
+  const [vaultErrorCard, setVaultErrorCard] = useState(null);
+  const [deepSimResult, setDeepSimResult] = useState(null);
+  const [deepSimBusy, setDeepSimBusy] = useState(false);
   // Recovery lane for submissions whose hash never reached us (wallet answered
   // too slowly): the user pastes the explorer/wallet hash, we link the leg.
   const [hashPrompt, setHashPrompt] = useState(null);
@@ -187,6 +197,25 @@ export default function ExecutePanel({
       clearInterval(id);
     };
   }, [net.rpc]);
+
+  // Restore the newest known hide block for this account+network. Hides made
+  // before this tracking existed (or outside the app) leave it null — the
+  // maturity UI then warns instead of guessing.
+  useEffect(() => {
+    if (!account?.address) {
+      setReserveShieldedAt(null);
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(
+        `rhizome:lasthide:v1:${net.chainId}:${account.address}`,
+      );
+      const n = raw === null ? null : Number(raw);
+      setReserveShieldedAt(Number.isSafeInteger(n) && n >= 0 ? n : null);
+    } catch {
+      setReserveShieldedAt(null);
+    }
+  }, [account?.address, net.chainId]);
 
   async function discover() {
     setBusy("discover");
@@ -347,6 +376,18 @@ export default function ExecutePanel({
     const at = acceptedReceiptBlock(receipt);
     if (at === null) return false;
     patch(i, { stage: "shielded", shieldedAt: at });
+    // Every accepted hide mints a note the pool may later draw fees from; the
+    // most recent landing block bounds the youngest spendable note.
+    setReserveShieldedAt((prev) => {
+      const next = prev == null || at > prev ? at : prev;
+      try {
+        window.localStorage.setItem(
+          `rhizome:lasthide:v1:${net.chainId}:${account?.address ?? "unknown"}`,
+          String(next),
+        );
+      } catch {}
+      return next;
+    });
     say(`Piece ${i + 1} hidden at block ${at}. Enter the vault in ${delayBlocks} blocks (${formatDelay(delayBlocks, secondsPerBlock)}).`, "ok");
     return true;
   }
@@ -442,6 +483,22 @@ export default function ExecutePanel({
     shield(i);
   }
 
+  // Pre-flight: every note the vault tx will spend (position legs + the fee
+  // note) must be mature. Known ages block hard; unknown ages warn softly.
+  const maturityGate = useMemo(
+    () =>
+      noteMaturityGate({
+        knownBlocks: [
+          ...(schedule ?? []).map((_, i) => legs[i]?.shieldedAt ?? null),
+          reserveShieldedAt,
+        ],
+        currentBlock: block,
+        maturity: NOTE_MATURITY_BLOCKS,
+      }),
+    [schedule, legs, reserveShieldedAt, block],
+  );
+  const vaultMaturity = () => maturityGate;
+
   function investClick(i) {
     const blocker = gateBlocker();
     if (blocker) {
@@ -452,6 +509,20 @@ export default function ExecutePanel({
       say(`Piece ${i + 1}: run "test vault" before entering.`, "err");
       return;
     }
+    const gate = vaultMaturity();
+    if (gate.blocked) {
+      // DO NOT submit: the pool would revert while drawing the privacy fee.
+      setVaultMaturityCard({
+        piece: i + 1,
+        blocksRemaining: gate.blocksRemaining,
+      });
+      say(
+        `Piece ${i + 1}: a shielded note is too young to spend — waiting ${gate.blocksRemaining} blocks.`,
+        "err",
+      );
+      return;
+    }
+    setVaultMaturityCard(null);
     invest(i);
   }
 
@@ -638,6 +709,8 @@ export default function ExecutePanel({
     if (at === null) return false;
     patch(i, { stage: "invested", investedAt: at });
     say(`Piece ${i + 1} is in the vault at block ${at}.`, "ok");
+    setVaultErrorCard(null);
+    setDeepSimResult(null);
     return true;
   }
 
@@ -751,10 +824,46 @@ export default function ExecutePanel({
             });
           }
         } catch {}
+        // A paymaster-156 / fee-drawing revert is the one case the user cannot
+        // self-diagnose from the raw text: keep it as a persistent card with
+        // the honest explanation and a Deep Simulate escape hatch.
+        if (/paymaster.*156|transaction_execution_error|insufficient_balance/i.test(String(reason))) {
+          setVaultErrorCard({ piece: i + 1, reason: String(reason) });
+        }
         say(`Piece ${i + 1} vault move failed: ${humanizeRevert(reason)}`, "err");
       }
     } finally {
       setBusy(null);
+    }
+  }
+
+  // Deep Simulate: run the exact vault transaction through
+  // account.simulateTransaction with the fee charged (unlike the free dry run,
+  // which the STRK20 wallet API explicitly runs without real fees). Returns
+  // the revert reason verbatim, or success.
+  async function deepSimulate(i) {
+    if (!account || !schedule?.length) return;
+    setDeepSimBusy(true);
+    setDeepSimResult(null);
+    try {
+      const prepared = await dryRun(account, investActionsFor(schedule[i]));
+      const call = prepared?.call ?? prepared;
+      const [sim] = await account.simulateTransaction(
+        [{ type: "INVOKE", payload: call }],
+        { skipFeeCharge: false, skipValidate: true },
+      );
+      const reverted = String(sim?.transaction_trace?.execute_invocation_state ?? "") === "REVERTED"
+        || sim?.revert_error
+        || sim?.fee_estimation_error;
+      setDeepSimResult(
+        reverted
+          ? { ok: false, reason: String(sim?.revert_error ?? sim?.fee_estimation_error ?? "reverted in simulation") }
+          : { ok: true, reason: "simulation passed with the real fee charged" },
+      );
+    } catch (e) {
+      setDeepSimResult({ ok: false, reason: String(e?.message ?? e) });
+    } finally {
+      setDeepSimBusy(false);
     }
   }
 
@@ -989,6 +1098,11 @@ export default function ExecutePanel({
                     ✓ passed
                   </span>
                 )}
+                {shieldDryRun && (
+                  <span style={{ marginLeft: 8, fontSize: 11, color: "var(--ghost)" }}>
+                    simulation — charges no real fee
+                  </span>
+                )}
                 {scheduleSource === "sepolia-rehearsal" && <p className="status" style={{ marginTop: 8 }}>Practice amount {strk(schedule[0].amount)}, not a real recommendation.</p>}
                 {!shieldDryRun && <p className="status" style={{ marginTop: 8 }}>You must pass this before Hide unlocks.</p>}
               </>
@@ -1106,6 +1220,105 @@ export default function ExecutePanel({
           </div>
         </div>
       </div>
+
+      {/* TASK 1 — amber pre-flight maturity card with a live countdown.
+          Auto-clears when the countdown reaches zero (the 12s block poll
+          re-renders this); "Retry when mature" re-runs investClick. */}
+      {vaultMaturityCard && ready && (
+        <div
+          className="card maturity-card"
+          role="alert"
+          style={{
+            marginTop: 16,
+            padding: "14px 16px",
+            border: "1px solid var(--amber, #c9a227)",
+            borderRadius: 10,
+            direction: "ltr",
+          }}
+        >
+          <p style={{ margin: 0, color: "var(--amber, #c9a227)", fontWeight: 600 }}>
+            A shielded note is too young to spend.
+          </p>
+          <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
+            It matures in ~{maturityGate.blocked ? maturityGate.blocksRemaining : 0} blocks (~
+            {formatDelay(maturityGate.blocked ? maturityGate.blocksRemaining : 0, secondsPerBlock)}).
+            The dry run can&apos;t detect this — simulation charges no real fee.
+          </p>
+          <button
+            type="button"
+            className="chip"
+            disabled={vaultMaturity().blocked}
+            onClick={() => {
+              setVaultMaturityCard(null);
+              investClick(vaultMaturityCard.piece - 1);
+            }}
+          >
+            Retry when mature
+          </button>
+        </div>
+      )}
+
+      {/* TASK 2 — persistent vault failure card (paymaster 156 / fee drawing) */}
+      {vaultErrorCard && ready && (
+        <div
+          className="card vault-error-card"
+          role="alert"
+          style={{
+            marginTop: 16,
+            padding: "14px 16px",
+            border: "1px solid var(--error)",
+            borderRadius: 10,
+            direction: "ltr",
+          }}
+        >
+          <p style={{ margin: 0, color: "var(--error)", fontWeight: 600 }}>
+            Piece {vaultErrorCard.piece}: the vault transaction reverted while drawing the privacy fee.
+          </p>
+          <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
+            Most common cause: a fee note younger than 10 blocks. Wait ~1 minute and retry. If it
+            persists, run Deep Simulate.
+          </p>
+          <button
+            type="button"
+            className="chip"
+            onClick={() => deepSimulate(vaultErrorCard.piece - 1)}
+            disabled={deepSimBusy}
+          >
+            {deepSimBusy ? "simulating…" : "Deep Simulate"}
+          </button>
+          {deepSimResult && (
+            <p
+              className="deep-sim-result"
+              style={{
+                marginTop: 10,
+                marginBottom: 0,
+                fontFamily: "var(--mono)",
+                fontSize: 12,
+                whiteSpace: "pre-wrap",
+                color: deepSimResult.ok ? "var(--ok, #2e9e5b)" : "var(--error)",
+                direction: "ltr",
+              }}
+            >
+              {deepSimResult.ok ? "✓ " : "✗ "}
+              {deepSimResult.reason}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Unknown note ages: honest, non-blocking warning */}
+      {(() => {
+        const gate = vaultMaturity();
+        if (!gate.blocked && gate.unknownAges.length > 0 && feePlan?.reserveVerified && ready) {
+          return (
+            <p className="status" style={{ marginTop: 10, fontSize: 12 }}>
+              Note: the age of {gate.unknownAges.length === 1 ? "one shielded note is" : `${gate.unknownAges.length} shielded notes are`} unknown
+              (hidden outside this app or before tracking). If the vault move reverts, wait ~1 minute and retry.
+            </p>
+          );
+        }
+        return null;
+      })()}
 
       {/* advanced / debug */}
       {ready && deployed && network === "sepolia" && (
