@@ -874,11 +874,55 @@ export default function ExecutePanel({
       }
       const call = prepared?.call ?? prepared;
       // Step 2: simulate the exact invoke WITH the fee charged.
-      try {
-        const [sim] = await account.simulateTransaction(
-          [{ type: "INVOKE", payload: call }],
-          { skipFeeCharge: false, skipValidate: true },
+      //
+      // The wallet's simulate-mode call is documented as "not submittable —
+      // only useful for fee estimation": proof fields are empty and calldata
+      // can arrive sparse (placeholders the wallet never substituted surface
+      // as undefined). starknet.js felt() crashes on undefined before the
+      // contract ever runs, so log the exact payload, then deep-clone with
+      // undefined/null felt slots replaced by "0". The contract then reverts
+      // with its REAL reason instead of the SDK crashing client-side.
+      const invocation = [{ type: "INVOKE", payload: call }];
+      if (typeof console !== "undefined") {
+        console.log(
+          "Deep Simulate payload:",
+          JSON.stringify(invocation, (k, v) => (typeof v === "bigint" ? v.toString() : v), 2),
         );
+      }
+      const warnings = [];
+      const sanitizeFelts = (node, path) => {
+        if (Array.isArray(node)) {
+          return node.map((v, idx) => {
+            if (v === undefined || v === null) {
+              warnings.push(path.concat(idx).join("."));
+              return "0";
+            }
+            return sanitizeFelts(v, path.concat(idx));
+          });
+        }
+        if (node !== null && typeof node === "object" && typeof node !== "bigint") {
+          const out = {};
+          for (const [k, v] of Object.entries(node)) {
+            if (v === undefined || v === null) {
+              warnings.push(path.concat(k).join("."));
+              out[k] = "0";
+              continue;
+            }
+            out[k] = sanitizeFelts(v, path.concat(k));
+          }
+          return out;
+        }
+        return node;
+      };
+      const sanitized = sanitizeFelts(invocation, []);
+      if (typeof console !== "undefined") {
+        for (const w of warnings) console.warn(`Replaced undefined argument at ${w} with 0 for simulation.`);
+      }
+      try {
+        const [sim] = await account.simulateTransaction(sanitized, {
+          skipFeeCharge: false,
+          skipValidate: true,
+        });
         const traceReverted =
           String(sim?.transaction_trace?.execute_invocation_state ?? "") === "REVERTED"
           || Boolean(sim?.revert_error)
@@ -894,9 +938,21 @@ export default function ExecutePanel({
             : { ok: true, reason: "simulation passed with the real fee charged" },
         );
       } catch (e) {
+        // A local SDK crash (felt()/undefined/bigint) means the payload could
+        // not even be encoded — distinct from an on-chain revert. Surface the
+        // dedicated encoding card and point at the console dump.
+        const raw = String(e?.message ?? e);
+        if (/felt|undefined|cannot be computed|bigint|compute by/i.test(raw)) {
+          setDeepSimResult({
+            ok: false,
+            reason:
+              "Deep Simulate payload encoding failed. One of the transaction arguments is missing (undefined). Check the browser console for the full payload dump.",
+          });
+          return;
+        }
         // The simulate call itself threw (wallet SDK shape mismatch, RPC
         // refusal, ...). Print the raw error verbatim — honest failure.
-        const detail = e?.cause?.message ? `${e.message} (cause: ${e.cause.message})` : String(e?.message ?? e);
+        const detail = e?.cause?.message ? `${e.message} (cause: ${e.cause.message})` : raw;
         setDeepSimResult({ ok: false, reason: `simulation call failed: ${detail}` });
       }
     } finally {
