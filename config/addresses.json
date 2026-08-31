@@ -41,7 +41,8 @@
       ],
       "observedAtBlock": 13541710
     },
-    "anonymizer": null
+    "anonymizer": "0x2c41ed90c6a399042cad69ce6e2435086d7f6140db592ee5241c67ced601dfa",
+    "anonymizerClassHash": "0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a"
   },
   "sepolia": {
     "chainId": "SN_SEPOLIA",
