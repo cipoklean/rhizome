@@ -50,6 +50,7 @@ export default function ExecutePanel({
   const [log, setLog] = useState([]);
   const [shieldDryRun, setShieldDryRun] = useState(false);
   const [dryRunPassTick, setDryRunPassTick] = useState(0);
+  const [gatewayError, setGatewayError] = useState(null);
   const [block, setBlock] = useState(null);
   const [delayMode, setDelayMode] = useState(network === "sepolia" ? "rehearsal" : "measured");
   const [legs, setLegs] = useState({});
@@ -152,6 +153,7 @@ export default function ExecutePanel({
   async function pick(wallet) {
     setBusy("connect");
     setShieldDryRun(false);
+    setGatewayError(null);
     setSelectedWallet(null);
     setAccount(null);
     setBalances(null);
@@ -180,6 +182,7 @@ export default function ExecutePanel({
       setSelectedWallet(wallet);
       setAccount(acc);
       setWalletObj(wallet);
+      setGatewayError(null);
       say(`Connected · ${acc.address.slice(0, 10)}… · ${net.chainId}`, "ok");
       phase = "balance consent";
       const tokens = [token, vToken].filter(Boolean);
@@ -198,6 +201,19 @@ export default function ExecutePanel({
         "network switch": `Switch to ${net.chainId} failed`,
         "account refresh": "Wallet refresh failed after switching",
       };
+      // Plain-English mapping so the persistent error area is human-readable.
+      const code = e?.code ?? e?.cause?.code;
+      let gatewayMessage;
+      if (code === 4001 || /reject|denied|user cancelled/i.test(e.message || "")) {
+        gatewayMessage = "You rejected the request in your wallet.";
+      } else if (phase === "network switch") {
+        gatewayMessage = `Your wallet doesn't recognize this Starknet chain (${net.chainId}). Add it manually or use a Starknet-native wallet.`;
+      } else if (/rpc|network|connect|timeout|fetch failed|ENOTFOUND/i.test(e.message || "")) {
+        gatewayMessage = "Wallet can't reach the RPC. Try again, or switch network.";
+      } else {
+        gatewayMessage = `${labels[phase] ?? "Could not connect"}: ${e.message}`;
+      }
+      setGatewayError(gatewayMessage);
       say(`${labels[phase] ?? "Could not connect"}: ${e.message}`, "err");
     } finally {
       setBusy(null);
