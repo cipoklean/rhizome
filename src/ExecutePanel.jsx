@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   acceptedReceiptBlock,
   buildFeeReservePlan,
@@ -255,6 +255,20 @@ export default function ExecutePanel({
     return ensureWalletChain(selectedWallet, net.chainId);
   }
 
+  // Re-read the wallet's shielded balances. The fee-reserve gate depends on
+  // this number; without a refresh after a hide/deposit the gate would keep
+  // reporting a stale shortfall and loop forever.
+  const refreshBalances = useCallback(async () => {
+    if (!account || !walletObj) return;
+    const tokens = [token, vToken].filter(Boolean);
+    try {
+      const b = await shieldedBalances(account, tokens);
+      setBalances(b);
+    } catch {
+      /* keep last known balances */
+    }
+  }, [account, walletObj, token, vToken]);
+
   async function dryRunShield() {
     if (!account || !schedule?.length) return;
     setBusy("dryrun-shield");
@@ -422,6 +436,9 @@ export default function ExecutePanel({
       if (!result.confirmed || !acceptShieldReceipt(i, result.receipt)) {
         say(`Piece ${i + 1} sent but not yet on-chain. Clock hasn't started; use Check.`, "info");
       }
+      // Re-read shielded balance so the fee-reserve gate reflects the new
+      // hidden balance instead of the stale pre-hide value.
+      await refreshBalances();
     } catch (e) {
       if (e?.code === "EXECUTE_TIMEOUT") {
         // Submission state unknown. Leave any prior hash intact and keep the
