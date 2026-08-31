@@ -27,6 +27,12 @@ import {
 /** Map a raw contract/pool revert string to plain English for the user. */
 function humanizeRevert(raw) {
   const s = String(raw || "").toLowerCase();
+  // PaymasterV2 wraps the real revert in a generic TRANSACTION_EXECUTION_ERROR
+  // (error 156). The note-spend maturity failure lands inside it, so surface
+  // the maturity explanation rather than the opaque paymaster text.
+  if (/paymaster.*156|transaction_execution_error/i.test(s)) {
+    return "The vault move was rejected by the pool. If your note was hidden fewer than 10 blocks ago, wait for it to mature, then press Check and retry. If the wait already passed, run the free vault test again before entering.";
+  }
   if (/reserve|insufficient|balance|short|fee|collect_fee|enough strk|not enough/i.test(s)) {
     return "Hidden reserve too low to pay the pool fee — add more hidden STRK (Step 2 shows the exact amount), then retry.";
   }
@@ -80,10 +86,11 @@ export default function ExecutePanel({
   const [gatewayError, setGatewayError] = useState(null);
   const [block, setBlock] = useState(null);
   const [delayMode, setDelayMode] = useState(network === "sepolia" ? "rehearsal" : "measured");
-  // User-chosen wait between hide and vault, in blocks. Capped 5..30 so the
-  // flow stays practical regardless of what the timing model suggests.
-  const [waitBlocks, setWaitBlocks] = useState(10);
-  const WAIT_OPTIONS = [5, 10, 15, 20, 30];
+  // User-chosen wait between hide and vault, in blocks. The pool will not spend
+  // a note younger than NOTE_MATURITY_BLOCKS, so the shortest offered wait is
+  // that floor — anything lower would show "ready" while the contract reverts.
+  const [waitBlocks, setWaitBlocks] = useState(NOTE_MATURITY_BLOCKS);
+  const WAIT_OPTIONS = [NOTE_MATURITY_BLOCKS, 15, 20, 25, 30];
   const [legs, setLegs] = useState({});
   const [hydratedProgressKey, setHydratedProgressKey] = useState(null);
   // Recovery lane for submissions whose hash never reached us (wallet answered
@@ -95,10 +102,12 @@ export default function ExecutePanel({
   const vToken = net.vesu?.vTokens?.STRK ?? null;
   const measuredDelayBlocks = Math.max(NOTE_MATURITY_BLOCKS, delay?.window ?? NOTE_MATURITY_BLOCKS);
   const isRehearsal = network === "sepolia" && delayMode === "rehearsal";
-  // The wait the user actually gets: their chosen blocks (5..30), or the
-  // rehearsal floor on Sepolia. The timing model's suggestion is a hint only —
-  // it must never force an unusable 900+ block wait.
-  const delayBlocks = isRehearsal ? NOTE_MATURITY_BLOCKS : Math.min(30, Math.max(5, waitBlocks));
+  // The wait the user actually gets: their chosen blocks, floored at the pool's
+  // spendability maturity (younger notes revert) and capped at 30. The timing
+  // model's suggestion is a hint only — it must never force an unusable wait.
+  const delayBlocks = isRehearsal
+    ? NOTE_MATURITY_BLOCKS
+    : Math.min(30, Math.max(NOTE_MATURITY_BLOCKS, waitBlocks));
   const shieldedStrkBalance = useMemo(() => {
     if (!Array.isArray(balances)) return null;
     try {
