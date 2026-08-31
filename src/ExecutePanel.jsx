@@ -24,6 +24,14 @@ import {
   shieldedBalances,
 } from "./lib/wallet.mjs";
 
+/** True when the wallet error means the user declined (not a chain failure). */
+function isUserRejection(e) {
+  const code = e?.code ?? e?.cause?.code ?? e?.originalError?.code;
+  if (code === 4001) return true;
+  const msg = (e?.message ?? e?.cause?.message ?? e?.originalError?.message ?? "").toLowerCase();
+  return /reject|denied|user cancelled|cancelled by user|user abort/i.test(msg);
+}
+
 export default function ExecutePanel({
   net,
   network,
@@ -423,6 +431,12 @@ export default function ExecutePanel({
           `Piece ${i + 1}: wallet did not answer in time. If you approved, wait for it to land, then press Check. Do NOT approve a second hide for this piece.`,
           "err",
         );
+      } else if (isUserRejection(e)) {
+        // The user declined in the wallet. Reset to the interactive state so the
+        // button returns to "hide" and never stays stuck on "sending...".
+        patch(i, { stage: null, shieldTx: null });
+        setGatewayError("You rejected the request in your wallet.");
+        say(`Piece ${i + 1}: you rejected the request in your wallet.`, "err");
       } else {
         patch(i, { stage: "failed" });
         let reason = e?.message ?? String(e);
@@ -626,6 +640,12 @@ export default function ExecutePanel({
           `Piece ${i + 1}: wallet did not answer in time. If you approved the vault move, wait for it to land, then press Check. Do NOT approve a second one.`,
           "err",
         );
+      } else if (isUserRejection(e)) {
+        // The user declined in the wallet. Reset so the button returns to
+        // "enter vault" and never stays stuck on "sending...".
+        patch(i, { stage: null, investTx: null });
+        setGatewayError("You rejected the request in your wallet.");
+        say(`Piece ${i + 1}: you rejected the request in your wallet.`, "err");
       } else {
         patch(i, { stage: "failed" });
         let reason = e?.message ?? String(e);
@@ -703,6 +723,11 @@ export default function ExecutePanel({
   }
 
   const strk = (v) => formatUnits(v, 18, { maxFractionDigits: 4 });
+  // Starkscan is the standard Starknet explorer and honours ?chain= so the
+  // same link resolves on mainnet or Sepolia.
+  const explorerChain = net.chainId === "SN_MAIN" ? "mainnet" : net.chainId === "SN_SEPOLIA" ? "sepolia" : "mainnet";
+  const explorerTx = (hash) => `https://starkscan.co/tx/${hash}?chain=${explorerChain}`;
+
   const scheduledAmount = feePlan?.legAmounts.reduce((s, a) => s + a, 0n) ?? 0n;
   const paidGateReason = !paidSubmissionAllowed
     ? paidSubmissionReason ?? "Not available for this plan."
@@ -965,6 +990,17 @@ export default function ExecutePanel({
                             >
                               {busy === `shield-${i}` ? "sending…" : busy === `check-shield-${i}` ? "checking…" : state.shieldedAt ? `block ${state.shieldedAt}` : state.shieldTx || state.stage === "shield-pending" ? "check" : status.retryable ? "retry" : "hide"}
                             </button>
+                            {state.shieldTx && (
+                              <a
+                                className="tx-link"
+                                href={explorerTx(state.shieldTx)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ display: "block", marginTop: 6, fontSize: 11 }}
+                              >
+                                view tx ↗
+                              </a>
+                            )}
                           </td>
                           <td>
                             {!state.shieldedAt ? (
@@ -988,6 +1024,17 @@ export default function ExecutePanel({
                               >
                                 {busy === `invest-${i}` ? "sending…" : state.stage === "invested" ? "done ✓" : "enter vault"}
                               </button>
+                            )}
+                            {state.investTx && state.stage !== "invested" && (
+                              <a
+                                className="tx-link"
+                                href={explorerTx(state.investTx)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ display: "block", marginTop: 6, fontSize: 11 }}
+                              >
+                                view tx ↗
+                              </a>
                             )}
                           </td>
                         </tr>

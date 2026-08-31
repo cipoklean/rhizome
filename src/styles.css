@@ -916,6 +916,16 @@ footer .meta {
   to { opacity: 1; }
 }
 
+.tx-link {
+  color: var(--dim);
+  text-decoration: none;
+  font-family: var(--mono);
+}
+.tx-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
