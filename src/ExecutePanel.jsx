@@ -24,6 +24,25 @@ import {
   shieldedBalances,
 } from "./lib/wallet.mjs";
 
+/** Map a raw contract/pool revert string to plain English for the user. */
+function humanizeRevert(raw) {
+  const s = String(raw || "").toLowerCase();
+  if (/reserve|insufficient|balance|short|fee|collect_fee|enough strk|not enough/i.test(s)) {
+    return "Hidden reserve too low to pay the pool fee — add more hidden STRK (Step 2 shows the exact amount), then retry.";
+  }
+  if (/maturity|not spendable|too early|note not ready|10 block/i.test(s)) {
+    return "The hidden funds are not spendable yet (maturity). Wait a few blocks, then retry.";
+  }
+  if (/note|open note|unknown note|invalid note/i.test(s)) {
+    return "The private note could not be found or was already spent. Use Check, or re-run the free test.";
+  }
+  if (/argent|braavos|validate|signature/i.test(s)) {
+    return "The wallet rejected the transaction signature. Try again, or reconnect the wallet.";
+  }
+  // Fall back to the raw reason so nothing is hidden.
+  return String(raw || "transaction reverted");
+}
+
 /** True when the wallet error means the user declined (not a chain failure). */
 function isUserRejection(e) {
   const code = e?.code ?? e?.cause?.code ?? e?.originalError?.code;
@@ -514,7 +533,7 @@ export default function ExecutePanel({
             });
           }
         } catch {}
-        say(`Piece ${i + 1} hide failed: ${reason}`, "err");
+        say(`Piece ${i + 1} hide failed: ${humanizeRevert(reason)}`, "err");
       }
     } finally {
       setBusy(null);
@@ -723,7 +742,7 @@ export default function ExecutePanel({
             });
           }
         } catch {}
-        say(`Piece ${i + 1} vault move failed: ${reason}`, "err");
+        say(`Piece ${i + 1} vault move failed: ${humanizeRevert(reason)}`, "err");
       }
     } finally {
       setBusy(null);
