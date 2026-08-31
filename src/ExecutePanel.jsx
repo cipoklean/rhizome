@@ -873,6 +873,22 @@ export default function ExecutePanel({
         return;
       }
       const call = prepared?.call ?? prepared;
+      // Step 1.5 — casing map. The wallet speaks the SNIP-36 snake_case Call
+      // (contract_address, entry_point); starknet.js simulateTransaction
+      // strictly requires camelCase (contractAddress, entrypoint). Encoding a
+      // missing camelCase key is exactly what crashed felt() on undefined.
+      // Normalize each call object into a clean Call — no snake_case leftovers
+      // for the SDK to trip over.
+      const normalizeCall = (c) => {
+        if (Array.isArray(c)) return c.map(normalizeCall);
+        if (!c || typeof c !== "object") return c;
+        return {
+          contractAddress: c.contractAddress ?? c.contract_address,
+          entrypoint: c.entrypoint ?? c.entry_point,
+          calldata: c.calldata,
+        };
+      };
+      const cleanCall = normalizeCall(call);
       // Step 2: simulate the exact invoke WITH the fee charged.
       //
       // The wallet's simulate-mode call is documented as "not submittable —
@@ -882,7 +898,7 @@ export default function ExecutePanel({
       // contract ever runs, so log the exact payload, then deep-clone with
       // undefined/null felt slots replaced by "0". The contract then reverts
       // with its REAL reason instead of the SDK crashing client-side.
-      const invocation = [{ type: "INVOKE", payload: call }];
+      const invocation = [{ type: "INVOKE", payload: cleanCall }];
       if (typeof console !== "undefined") {
         console.log(
           "Deep Simulate payload:",
