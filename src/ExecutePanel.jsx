@@ -257,7 +257,9 @@ export default function ExecutePanel({
 
   // Re-read the wallet's shielded balances. The fee-reserve gate depends on
   // this number; without a refresh after a hide/deposit the gate would keep
-  // reporting a stale shortfall and loop forever.
+  // reporting a stale shortfall and loop forever. On failure we drop to null
+  // (shows "balance not shared") rather than keeping a stale value that makes
+  // the gate report a wrong shortfall when the RPC is down.
   const refreshBalances = useCallback(async () => {
     if (!account || !walletObj) return;
     const tokens = [token, vToken].filter(Boolean);
@@ -265,7 +267,7 @@ export default function ExecutePanel({
       const b = await shieldedBalances(account, tokens);
       setBalances(b);
     } catch {
-      /* keep last known balances */
+      setBalances(null);
     }
   }, [account, walletObj, token, vToken]);
 

@@ -5,7 +5,7 @@
     "accountClassHash": "0xd632f69c8e02ea43f1d8a7c3eb441c67eb935f460c02e3860f7c410115d10f",
     "rpc": [
       "https://api.cartridge.gg/x/starknet/mainnet",
-      "https://rpc.starknet.lava.build"
+      "https://starknet.lava.build"
     ],
     "strk20Pool": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
     "tokens": {
