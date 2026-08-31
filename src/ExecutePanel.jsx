@@ -61,6 +61,10 @@ export default function ExecutePanel({
   const [gatewayError, setGatewayError] = useState(null);
   const [block, setBlock] = useState(null);
   const [delayMode, setDelayMode] = useState(network === "sepolia" ? "rehearsal" : "measured");
+  // User-chosen wait between hide and vault, in blocks. Capped 5..30 so the
+  // flow stays practical regardless of what the timing model suggests.
+  const [waitBlocks, setWaitBlocks] = useState(10);
+  const WAIT_OPTIONS = [5, 10, 15, 20, 30];
   const [legs, setLegs] = useState({});
   const [hydratedProgressKey, setHydratedProgressKey] = useState(null);
   // Recovery lane for submissions whose hash never reached us (wallet answered
@@ -71,6 +75,11 @@ export default function ExecutePanel({
   const anonymizer = net.anonymizer;
   const vToken = net.vesu?.vTokens?.STRK ?? null;
   const measuredDelayBlocks = Math.max(NOTE_MATURITY_BLOCKS, delay?.window ?? NOTE_MATURITY_BLOCKS);
+  const isRehearsal = network === "sepolia" && delayMode === "rehearsal";
+  // The wait the user actually gets: their chosen blocks (5..30), or the
+  // rehearsal floor on Sepolia. The timing model's suggestion is a hint only —
+  // it must never force an unusable 900+ block wait.
+  const delayBlocks = isRehearsal ? NOTE_MATURITY_BLOCKS : Math.min(30, Math.max(5, waitBlocks));
   const shieldedStrkBalance = useMemo(() => {
     if (!Array.isArray(balances)) return null;
     try {
@@ -94,9 +103,6 @@ export default function ExecutePanel({
   }, [schedule, fee, shieldedStrkBalance]);
 
   const paidGateOpen = Boolean(paidSubmissionAllowed && feePlan?.paidSubmissionAllowed);
-  const isRehearsal = network === "sepolia" && delayMode === "rehearsal";
-  const delayBlocks = isRehearsal ? NOTE_MATURITY_BLOCKS : measuredDelayBlocks;
-
   const progressKey = useMemo(
     () =>
       executionProgressKey({
@@ -837,14 +843,20 @@ export default function ExecutePanel({
           <h4>Connect wallet</h4>
           <p>We never see your keys. Your wallet does the hiding.</p>
             <div className="controls" style={{ marginTop: 0 }}>
-              {network === "sepolia" && (
-                <label className="field">
-                  Wait time
-                  <select value={delayMode} onChange={(e) => setDelayMode(e.target.value)}>
-                    <option value="rehearsal">quick test · {NOTE_MATURITY_BLOCKS} blocks</option>
-                    <option value="measured">real wait · {measuredDelayBlocks.toLocaleString()} blocks</option>
-                  </select>
-                </label>
+              <label className="field">
+                Wait before vault
+                <select value={String(waitBlocks)} onChange={(e) => setWaitBlocks(Number(e.target.value))}>
+                  {WAIT_OPTIONS.map((b) => (
+                    <option key={b} value={String(b)}>
+                      {b} blocks (~{formatDelay(b, secondsPerBlock)})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {delay && !isRehearsal && (
+                <p className="status" style={{ marginTop: 6, maxWidth: 320 }}>
+                  Timing model suggests {measuredDelayBlocks.toLocaleString()} blocks for cover; you chose {waitBlocks}. Shorter waits mean thinner cover — your call.
+                </p>
               )}
               {!wallets && (
                 <button type="button" className="chip" onClick={discover} disabled={busy === "discover"}>
