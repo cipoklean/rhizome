@@ -2,6 +2,7 @@
   "$comment": "Verified on-chain, not copied from docs. Re-check with `npm run verify:facts`.",
   "mainnet": {
     "chainId": "SN_MAIN",
+    "accountClassHash": "0xd632f69c8e02ea43f1d8a7c3eb441c67eb935f460c02e3860f7c410115d10f",
     "rpc": [
       "https://api.cartridge.gg/x/starknet/mainnet",
       "https://rpc.starknet.lava.build"
