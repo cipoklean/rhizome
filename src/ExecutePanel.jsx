@@ -113,6 +113,16 @@ export default function ExecutePanel({
     setHydratedProgressKey(progressKey);
   }, [progressKey, schedule.length]);
 
+  // A passed dry run is only valid for the exact plan it was tested against.
+  // When the amount (and therefore the schedule) changes, drop the stale pass
+  // so the user must re-test before Hide unlocks. Key on content, not just
+  // length, so a different amount with the same tranche count still resets.
+  const scheduleKey = (schedule ?? []).map((s) => s.amount?.toString() ?? String(s)).join(",");
+  useEffect(() => {
+    setShieldDryRun(false);
+    setDryRunPassTick(0);
+  }, [scheduleKey]);
+
   useEffect(() => {
     if (!progressKey || hydratedProgressKey !== progressKey) return;
     writeExecutionProgress(window.localStorage, progressKey, legs, schedule.length);
