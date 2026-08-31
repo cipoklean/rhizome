@@ -814,22 +814,36 @@ export default function ExecutePanel({
             reason = `${e.constructor?.name || "Error"} code ${e.code}: ${reason}`;
           }
           // Debug dump so the next failure reveals the full error shape.
+          // Wallet SDKs (paymaster wrappers especially) hide the reason under
+          // .cause or non-enumerable fields; serialize the whole chain.
           if (typeof console !== "undefined") {
-            console.error("vault-fail error shape:", {
-              name: e?.constructor?.name,
-              message: e?.message,
-              code: e?.code,
-              data: e?.data,
-              causePresent: typeof e?.cause === "object" && e?.cause !== null,
-            });
+            const serializeCause = (err, depth = 0, seen = new Set()) => {
+              if (!err || typeof err !== "object" || seen.has(err) || depth > 6) return "[depth limit]";
+              seen.add(err);
+              const out = {
+                name: err.constructor?.name,
+                message: err.message,
+                code: err.code,
+                data: err.data,
+                ownPropertyNames: Object.getOwnPropertyNames(err),
+                cause: err.cause ? serializeCause(err.cause, depth + 1, seen) : undefined,
+                originalError: err.originalError ? serializeCause(err.originalError, depth + 1, seen) : undefined,
+                error: err.error ? serializeCause(err.error, depth + 1, seen) : undefined,
+              };
+              return out;
+            };
+            console.error("vault-fail error shape:", serializeCause(e));
           }
         } catch {}
-        // A paymaster-156 / fee-drawing revert is the one case the user cannot
-        // self-diagnose from the raw text: keep it as a persistent card with
-        // the honest explanation and a Deep Simulate escape hatch.
-        if (/paymaster.*156|transaction_execution_error|insufficient_balance/i.test(String(reason))) {
-          setVaultErrorCard({ piece: i + 1, reason: String(reason) });
-        }
+        // ANY vault failure shows the persistent card + Deep Simulate. The
+        // fee-maturity pattern keeps its specific copy; everything else gets
+        // the generic wrapper copy with the code and message inline.
+        const feePattern = /paymaster.*156|transaction_execution_error|insufficient_balance/i.test(String(reason));
+        setVaultErrorCard({
+          piece: i + 1,
+          reason: String(reason),
+          feePattern,
+        });
         say(`Piece ${i + 1} vault move failed: ${humanizeRevert(reason)}`, "err");
       }
     } finally {
@@ -840,28 +854,51 @@ export default function ExecutePanel({
   // Deep Simulate: run the exact vault transaction through
   // account.simulateTransaction with the fee charged (unlike the free dry run,
   // which the STRK20 wallet API explicitly runs without real fees). Returns
-  // the revert reason verbatim, or success.
+  // the revert reason verbatim, or success. Every failure mode — including
+  // simulate itself throwing — surfaces raw in the card, never silently.
   async function deepSimulate(i) {
     if (!account || !schedule?.length) return;
     setDeepSimBusy(true);
     setDeepSimResult(null);
     try {
-      const prepared = await dryRun(account, investActionsFor(schedule[i]));
+      // Step 1: the wallet assembles the STRK20 call (free, simulate mode).
+      let prepared;
+      try {
+        prepared = await dryRun(account, investActionsFor(schedule[i]));
+      } catch (e) {
+        setDeepSimResult({
+          ok: false,
+          reason: `wallet refused to prepare the simulation: ${String(e?.message ?? e)}`,
+        });
+        return;
+      }
       const call = prepared?.call ?? prepared;
-      const [sim] = await account.simulateTransaction(
-        [{ type: "INVOKE", payload: call }],
-        { skipFeeCharge: false, skipValidate: true },
-      );
-      const reverted = String(sim?.transaction_trace?.execute_invocation_state ?? "") === "REVERTED"
-        || sim?.revert_error
-        || sim?.fee_estimation_error;
-      setDeepSimResult(
-        reverted
-          ? { ok: false, reason: String(sim?.revert_error ?? sim?.fee_estimation_error ?? "reverted in simulation") }
-          : { ok: true, reason: "simulation passed with the real fee charged" },
-      );
-    } catch (e) {
-      setDeepSimResult({ ok: false, reason: String(e?.message ?? e) });
+      // Step 2: simulate the exact invoke WITH the fee charged.
+      try {
+        const [sim] = await account.simulateTransaction(
+          [{ type: "INVOKE", payload: call }],
+          { skipFeeCharge: false, skipValidate: true },
+        );
+        const traceReverted =
+          String(sim?.transaction_trace?.execute_invocation_state ?? "") === "REVERTED"
+          || Boolean(sim?.revert_error)
+          || Boolean(sim?.fee_estimation_error);
+        setDeepSimResult(
+          traceReverted
+            ? {
+                ok: false,
+                reason: String(
+                  sim?.revert_error ?? sim?.fee_estimation_error ?? "reverted in simulation",
+                ),
+              }
+            : { ok: true, reason: "simulation passed with the real fee charged" },
+        );
+      } catch (e) {
+        // The simulate call itself threw (wallet SDK shape mismatch, RPC
+        // refusal, ...). Print the raw error verbatim — honest failure.
+        const detail = e?.cause?.message ? `${e.message} (cause: ${e.cause.message})` : String(e?.message ?? e);
+        setDeepSimResult({ ok: false, reason: `simulation call failed: ${detail}` });
+      }
     } finally {
       setDeepSimBusy(false);
     }
@@ -1271,13 +1308,29 @@ export default function ExecutePanel({
             direction: "ltr",
           }}
         >
-          <p style={{ margin: 0, color: "var(--error)", fontWeight: 600 }}>
-            Piece {vaultErrorCard.piece}: the vault transaction reverted while drawing the privacy fee.
-          </p>
-          <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
-            Most common cause: a fee note younger than 10 blocks. Wait ~1 minute and retry. If it
-            persists, run Deep Simulate.
-          </p>
+          {vaultErrorCard.feePattern ? (
+            <>
+              <p style={{ margin: 0, color: "var(--error)", fontWeight: 600 }}>
+                Piece {vaultErrorCard.piece}: the vault transaction reverted while drawing the privacy fee.
+              </p>
+              <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
+                Most common cause: a fee note younger than 10 blocks. Wait ~1 minute and retry. If it
+                persists, run Deep Simulate.
+              </p>
+            </>
+          ) : (
+            <>
+              <p style={{ margin: 0, color: "var(--error)", fontWeight: 600 }}>
+                Piece {vaultErrorCard.piece}: the vault transaction failed.
+              </p>
+              <p style={{ margin: "8px 0 10px", fontSize: 13, fontFamily: "var(--mono)", wordBreak: "break-word" }}>
+                {vaultErrorCard.reason}
+              </p>
+              <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
+                The wrapper hides the reason — run Deep Simulate to read the exact on-chain revert.
+              </p>
+            </>
+          )}
           <button
             type="button"
             className="chip"
