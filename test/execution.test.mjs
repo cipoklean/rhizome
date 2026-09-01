@@ -7,6 +7,7 @@ import {
   executionProgressKey,
   noteMaturityGate,
   readExecutionProgress,
+  reconcileInFlightLegs,
   sanitizeExecutionProgress,
   writeExecutionProgress,
 } from "../src/lib/execution.mjs";
@@ -340,4 +341,33 @@ test("maturity gate never guesses an unknown note age", () => {
   });
   assert.deepEqual(garbage.unknownAges, [0, 1]);
   assert.equal(garbage.blocked, false);
+});
+
+test("vault failure persists a terminal, retryable stage", () => {
+  // A paymaster pre-flight refusal: no hash was ever broadcast, the catch
+  // marks the leg vault_failed, and the sanitizer must keep it durable so
+  // the retry control survives refresh.
+  const saved = sanitizeExecutionProgress(
+    { 0: { stage: "vault_failed", shieldedAt: 14165469, shieldTx: "0x03a770fe0820dcf2aae8d9c666583c9582ed99a140aae128a0d1f5ff2fc965d0" } },
+    1,
+  );
+  assert.equal(saved[0].stage, "vault_failed");
+  assert.ok(saved[0].shieldedAt, "hide evidence must survive with the failure");
+});
+
+test("reconcile resets in-flight vault legs with no hash, keeps hashed ones", () => {
+  const saved = sanitizeExecutionProgress(
+    {
+      0: { stage: "invest-pending", shieldedAt: 100 }, // never broadcast
+      1: { stage: "invest-pending", shieldedAt: 100, investTx: "0x03a770fe0820dcf2aae8d9c666583c9582ed99a140aae128a0d1f5ff2fc965d0" }, // real submission
+      2: { stage: "invested", investedAt: 200 }, // done — untouched
+    },
+    3,
+  );
+  const { progress, resetLegs } = reconcileInFlightLegs(saved, 3);
+  assert.deepEqual(resetLegs, [0], "only the no-hash leg resets");
+  assert.equal(progress[0].stage, undefined, "reset leg loses its in-flight label");
+  assert.ok(progress[0].shieldedAt != null, "its hide evidence is preserved");
+  assert.equal(progress[1].stage, "invest-pending", "hashed leg stays in-flight");
+  assert.equal(progress[2].stage, "invested", "done legs are never touched");
 });

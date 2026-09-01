@@ -5,6 +5,7 @@ import {
   executionProgressKey,
   noteMaturityGate,
   readExecutionProgress,
+  reconcileInFlightLegs,
   writeExecutionProgress,
 } from "./lib/execution.mjs";
 import { connect } from "./lib/pool.mjs";
@@ -163,7 +164,19 @@ export default function ExecutePanel({
       return;
     }
     const saved = readExecutionProgress(window.localStorage, progressKey, schedule.length);
-    setLegs(saved);
+    // 4I Task 2: an in-flight "entering vault" from a previous session with
+    // no broadcast (no hash) can only be a wallet/paymaster pre-flight
+    // refusal. Reconcile it to ready so the row never renders a dead
+    // "entering vault…" after refresh; a stored hash stays in-flight and
+    // keeps its Check.
+    const { progress, resetLegs } = reconcileInFlightLegs(saved, schedule.length);
+    setLegs(progress);
+    if (resetLegs.length > 0) {
+      say(
+        `A previous vault attempt never broadcast — state reset for ${resetLegs.map((i) => `piece ${i + 1}`).join(", ")}. You can retry.`,
+        "info",
+      );
+    }
     setHydratedProgressKey(progressKey);
   }, [progressKey, schedule.length]);
 
@@ -801,7 +814,7 @@ export default function ExecutePanel({
         setGatewayError("You rejected the request in your wallet.");
         say(`Piece ${i + 1}: you rejected the request in your wallet.`, "err");
       } else {
-        patch(i, { stage: "failed" });
+        patch(i, { stage: "vault_failed" });
         let reason = e?.message ?? String(e);
         try {
           if (e?.data) {
@@ -1030,14 +1043,19 @@ export default function ExecutePanel({
 
   async function checkInvest(i) {
     const tx = legs[i]?.investTx;
-    if (!tx) return;
+    if (!tx) {
+      // 4I Task 3: never a silent no-op. A vault attempt that never
+      // broadcast has nothing to check — say so and point at retry.
+      say(`Piece ${i + 1}: nothing to check — no vault transaction was broadcast. Press "try again" to retry the move.`, "info");
+      return;
+    }
     setBusy(`check-invest-${i}`);
     try {
       const receipt = await retryReceipt(tx);
       if (!acceptInvestReceipt(i, receipt)) say(`Piece ${i + 1} vault receipt still pending.`, "info");
     } catch (e) {
       if (/revert/i.test(e.message)) {
-        patch(i, { stage: "failed" });
+        patch(i, { stage: "vault_failed" });
         say(`Piece ${i + 1} vault move reverted: ${e.message}`, "err");
       } else say(`Vault receipt not visible yet: ${e.message}`, "info");
     } finally {
@@ -1077,6 +1095,10 @@ export default function ExecutePanel({
     const leg = legs[i] ?? {};
     if (leg.stage === "invested") return { label: "in vault ✓", done: true };
     if (leg.stage === "invest-pending") return { label: "entering vault…", done: false };
+    // A failed vault attempt is never a dead end: nothing was broadcast, so
+    // the row offers retry alongside Check. Anything left over from an older
+    // session that never broadcast is reconciled to ready at hydration.
+    if (leg.stage === "vault_failed") return { label: "vault failed — retryable", done: false, vaultFailed: true };
     // A submitted-but-unconfirmed hide is checkable, never a dead end —
     // with or without a stored hash (wallets can drop the answer entirely).
     if (!leg.shieldedAt && (leg.shieldTx || leg.stage === "shield-pending")) {
@@ -1340,9 +1362,26 @@ export default function ExecutePanel({
                             {!state.shieldedAt ? (
                               <span style={{ color: "var(--ghost)" }}></span>
                             ) : state.stage === "invest-pending" ? (
-                              <button type="button" className="chip" onClick={() => checkInvest(i)} disabled={busy != null}>
+                              <button type="button" className="chip" onClick={() => checkInvest(i)} disabled={busy != null} title="Check the on-chain receipt of the submitted vault transaction">
                                 {busy === `check-invest-${i}` ? "checking…" : "check"}
                               </button>
+                            ) : state.stage === "vault_failed" ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="chip"
+                                  onClick={() => investClick(i)}
+                                  disabled={busy != null}
+                                  title="A previous attempt never broadcast. Retry the vault move."
+                                >
+                                  {busy === `invest-${i}` ? "sending…" : "try again"}
+                                </button>
+                                {state.investTx && (
+                                  <button type="button" className="chip" onClick={() => checkInvest(i)} disabled={busy != null} style={{ marginLeft: 6 }} title="Check the receipt of the last submitted attempt">
+                                    check
+                                  </button>
+                                )}
+                              </>
                             ) : !status.ready ? (
                               <span style={{ color: "var(--faint)" }}>wait</span>
                             ) : !state.investDryRun ? (

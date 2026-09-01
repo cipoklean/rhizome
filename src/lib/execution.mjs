@@ -10,6 +10,10 @@ const DURABLE_STAGES = new Set([
   "invest-pending",
   "invested",
   "failed",
+  // A vault attempt that failed at the wallet/paymaster level. It is terminal
+  // for THAT attempt (nothing was broadcast — no hash), but deliberately not
+  // a dead end: the row renders a retry control and the leg stays hidden-side.
+  "vault_failed",
 ]);
 
 const txHash = (v) => (typeof v === "string" && /^0x[0-9a-f]+$/i.test(v) ? v : null);
@@ -100,6 +104,42 @@ export function sanitizeExecutionProgress(value, scheduleLength) {
     if (Object.keys(clean).length > 1 || clean.investDryRun) out[i] = clean;
   }
   return out;
+}
+
+/**
+ * Reconcile persisted in-flight legs at hydration, before anything renders.
+ *
+ * A crash or refresh during "entering vault" leaves the durable stage stuck at
+ * invest-pending. Two honest cases:
+ *  - A tx hash IS stored  -> a real submission may exist; keep in-flight and
+ *    let Check / receipt polling decide. Never guess it away.
+ *  - NO tx hash           -> nothing was ever broadcast (paymaster/wallet
+ *    refused pre-flight, or the wallet dropped the answer). Reset to ready so
+ *    the user is never locked out of their own funds by a stale label.
+ *
+ * Returns { progress, resetLegs: number[] } — a NEW progress object; the
+ * caller shows one line per reset leg.
+ */
+export function reconcileInFlightLegs(progress, scheduleLength) {
+  if (!progress || typeof progress !== "object") return { progress: {}, resetLegs: [] };
+  const out = {};
+  const resetLegs = [];
+  for (const [key, leg] of Object.entries(progress)) {
+    const i = Number(key);
+    if (!Number.isInteger(i) || i < 0 || i >= (scheduleLength ?? Infinity) || !leg || typeof leg !== "object") {
+      continue;
+    }
+    if (leg.stage === "invest-pending" && !txHash(leg.investTx)) {
+      const clean = { ...leg, stage: undefined, investTx: undefined };
+      delete clean.stage;
+      delete clean.investTx;
+      if (Object.keys(clean).length > 0) out[i] = clean;
+      resetLegs.push(i);
+      continue;
+    }
+    out[i] = leg;
+  }
+  return { progress: out, resetLegs };
 }
 
 export function readExecutionProgress(storage, key, scheduleLength) {
