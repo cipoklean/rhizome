@@ -836,6 +836,36 @@ export default function ExecutePanel({
             console.error("vault-fail error shape:", serializeCause(e));
           }
         } catch {}
+        // 4F: the on-chain receipt of the failed invoke is the remaining
+        // truth. Wallets often return the hash even when they report an
+        // error — walk the same cause chain and capture any tx hash so the
+        // receipt can be pulled and the REAL revert read.
+        const TX_HASH_PATTERN = /^0x[0-9a-f]{40,80}$/i;
+        const findTxHash = (node, depth = 0, seen = new Set()) => {
+          if (!node || depth > 6) return null;
+          if (typeof node === "string") return TX_HASH_PATTERN.test(node) ? node : null;
+          if (typeof node !== "object" || seen.has(node)) return null;
+          seen.add(node);
+          for (const key of ["transaction_hash", "transactionHash", "txHash", "tx_hash"]) {
+            const v = node[key];
+            if (typeof v === "string" && TX_HASH_PATTERN.test(v)) return v;
+          }
+          // data.transaction_hash / nested wrappers
+          for (const key of ["data", "cause", "originalError", "error", "response"]) {
+            const found = findTxHash(node[key], depth + 1, seen);
+            if (found) return found;
+          }
+          // last resort: any own property value that is a tx-hash-shaped string
+          for (const v of Object.values(node)) {
+            if (typeof v === "string" && TX_HASH_PATTERN.test(v)) return v;
+          }
+          return null;
+        };
+        const failedTxHash = findTxHash(e);
+        if (typeof console !== "undefined") {
+          if (failedTxHash) console.log("vault-fail tx hash:", failedTxHash);
+          else console.log("vault-fail tx hash: none found in error chain");
+        }
         // ANY vault failure shows the persistent card + Deep Simulate. The
         // fee-maturity pattern keeps its specific copy; everything else gets
         // the generic wrapper copy with the code and message inline.
@@ -844,6 +874,7 @@ export default function ExecutePanel({
           piece: i + 1,
           reason: String(reason),
           feePattern,
+          txHash: failedTxHash,
         });
         say(`Piece ${i + 1} vault move failed: ${humanizeRevert(reason)}`, "err");
       }
@@ -1368,6 +1399,35 @@ export default function ExecutePanel({
           >
             {deepSimBusy ? "simulating…" : "Deep Simulate"}
           </button>
+          {vaultErrorCard.txHash && (
+            <button
+              type="button"
+              className="chip"
+              title={vaultErrorCard.txHash}
+              onClick={() => {
+                if (typeof navigator !== "undefined" && navigator.clipboard) {
+                  navigator.clipboard.writeText(vaultErrorCard.txHash).catch(() => {});
+                }
+                // Also surface it in the console — clipboard can silently fail.
+                if (typeof console !== "undefined") console.log("vault-fail tx hash:", vaultErrorCard.txHash);
+                say(`Copied tx hash: ${vaultErrorCard.txHash.slice(0, 18)}…`, "ok");
+              }}
+              style={{ marginLeft: 8 }}
+            >
+              Copy tx hash
+            </button>
+          )}
+          {vaultErrorCard.txHash && (
+            <a
+              className="tx-link"
+              href={explorerTx(vaultErrorCard.txHash)}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display: "inline-block", marginLeft: 8, fontSize: 11, verticalAlign: "middle" }}
+            >
+              view tx ↗
+            </a>
+          )}
           {deepSimResult && (
             <p
               className="deep-sim-result"
