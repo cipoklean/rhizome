@@ -753,22 +753,25 @@ export default function ExecutePanel({
       }
     }
     setBusy(`invest-${i}`);
-    // Pre-flight: the paymaster funds the 6-STRK fee leg + gas from the
-    // VISIBLE balance. When it's empty the paymaster fails pre-flight with
-    // the generic 156 and nothing is broadcast — refuse early, plainly.
+    // Pre-flight: the fee leg (6 STRK visible transfer to the fee router)
+    // plus gas (~3 STRK on mainnet, measured from real pool txs) is paid from
+    // the VISIBLE balance. Below the true minimum the paymaster refuses
+    // pre-flight with the generic 156 and nothing is broadcast — refuse
+    // early, plainly, with real numbers instead of padded ones.
     try {
       const visible = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: net.tokens.STRK });
-      const MIN_VISIBLE = 20n * 10n ** 18n; // 6 fee + ~11 gas bounds + margin
+      // 6 STRK fee leg + ~3 STRK gas (actual hide txs paid 3.0-3.2) + dust.
+      const MIN_VISIBLE = 92n * 10n ** 16n; // 9.2 STRK
       if (visible != null && visible < MIN_VISIBLE) {
         const have = Number(visible) / 1e18;
         setBusy(null);
         setVaultErrorCard({
           piece: i + 1,
-          reason: `Wallet has only ${have.toFixed(2)} visible STRK. The vault move is funded from your VISIBLE balance (6 STRK fee leg + gas), not from the shielded pool. Add visible STRK to ${account.address.slice(0, 10)}… and retry.`,
+          reason: `Wallet has only ${have.toFixed(2)} visible STRK. A pool transaction needs ~9 visible STRK minimum: the 6 STRK fee leg plus ~3 STRK gas. Shielded funds cannot pay for the move that spends them. Add visible STRK to ${account.address.slice(0, 10)}… and retry.`,
           feePattern: false,
         });
         say(
-          `Vault move blocked: only ${have.toFixed(2)} visible STRK — the paymaster funds the fee + gas from VISIBLE balance. Add ~25 STRK to your wallet and retry.`,
+          `Vault move blocked: only ${have.toFixed(2)} visible STRK — a pool transaction needs ~9 visible STRK (6 fee + ~3 gas).`,
           "err",
         );
         return;
