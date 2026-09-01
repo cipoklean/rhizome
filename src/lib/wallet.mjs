@@ -9,7 +9,7 @@
 //   walletV6.supportedWalletApi      capability detection
 //   strk20Balances / strk20PrepareInvoke / strk20InvokeTransaction
 
-import { CallData, RpcProvider, WalletAccountV6, constants, walletV6 } from "starknet";
+import { CallData, WalletAccountV6, constants, walletV6 } from "starknet";
 
 /** LendingOperation variants, in Cairo declaration order. */
 export const OPERATION = { Deposit: "0x0", Withdraw: "0x1" };
@@ -422,22 +422,48 @@ export async function rawSimulateInvoke({
   });
   const flags = chargeFee ? ["SKIP_VALIDATE"] : ["SKIP_VALIDATE", "SKIP_FEE_CHARGE"];
 
+  // Route browser POSTs through the Vercel proxy (api/simulate.js): public
+  // Starknet RPCs block direct browser POSTs via CORS, so the app talks to
+  // /api/simulate and the proxy relays server-side. In Node (tests/scripts)
+  // there is no CORS, so we call the RPC directly.
+  const rpcViaProxy =
+    typeof window !== "undefined" && typeof window.fetch === "function" && window.location?.protocol?.startsWith("http");
+  const rpcFetch = async (url, method, params) => {
+    const send = async (target, body) =>
+      (await fetch(target, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      })).json();
+    if (!rpcViaProxy) {
+      return send(url, { jsonrpc: "2.0", method, params, id: 1 });
+    }
+    const j = await send("/api/simulate", { rpcUrl: url, method, params, id: 1 });
+    if (j?.proxyError) throw new Error(String(j.error ?? "proxy failure"));
+    return j;
+  };
+
   let lastError = null;
   for (const url of rpcUrls ?? []) {
     try {
-      const provider = new RpcProvider({ nodeUrl: url });
-      const block = await provider.getBlockNumber();
+      const block = (await rpcFetch(url, "starknet_blockNumber", []))?.result;
+      if (typeof block !== "number") throw new Error("blockNumber unavailable");
       // Real nonce — the node rejects simulated invokes with a stale nonce
       // exactly like real ones ("Invalid transaction nonce ... got: 0x0").
-      // getNonceForAddress already returns a hex string ("0x4").
-      const nonce = await provider.getNonceForAddress(senderAddress);
+      // Response gives a hex string ("0x4").
+      const nonceResp = await rpcFetch(url, "starknet_getNonce", {
+        contract_address: senderAddress,
+        block_id: "latest",
+      });
+      const nonce = nonceResp?.result;
+      if (typeof nonce !== "string" || !nonce.startsWith("0x")) throw new Error("nonce unavailable");
       const tx = {
         type: "INVOKE",
         version: "0x100000000000000000000000000000003",
         sender_address: senderAddress,
         calldata: ["0x1", ...compiled],
         signature: [],
-        nonce: "0x" + nonce,
+        nonce,
         resource_bounds: {
           l2_gas: { max_amount: "0x20000000", max_price_per_unit: "0x1" },
           l1_gas: { max_amount: "0x0", max_price_per_unit: "0x1" },
@@ -449,17 +475,13 @@ export async function rawSimulateInvoke({
         nonce_data_availability_mode: "L1",
         fee_data_availability_mode: "L1",
       };
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "starknet_simulateTransactions",
-          params: [{ block_number: block }, [tx], flags],
-        }),
-      });
-      const j = await res.json();
+      // Positional params (proven live): [blockIdentifier, [tx], flags].
+      // Named form demands a `block_id` key — cartridge rejects block_number.
+      const j = await rpcFetch(url, "starknet_simulateTransactions", [
+        { block_number: block },
+        [tx],
+        flags,
+      ]);
       if (j.error) {
         // The node's execution errors carry the REAL revert text under
         // data.execution_error — surface it verbatim, not just the message.
