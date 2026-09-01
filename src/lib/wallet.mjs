@@ -149,6 +149,39 @@ export async function shieldedBalances(account, tokens) {
   return account.strk20Balances(tokens.map((token, i) => canonicalFelt(token, `balance token ${i}`)));
 }
 
+/**
+ * VISIBLE (public) ERC-20 balance via RPC. The paymaster funds every pool
+ * transaction from the user's VISIBLE STRK (6 STRK fee-leg transfer + gas
+ * bounds); when that balance is empty the paymaster fails pre-flight with
+ * the generic 156/TRANSACTION_EXECUTION_ERROR and NOTHING is broadcast.
+ * This read lets the UI refuse early with a plain reason instead.
+ * Returns null when no RPC answers (check skipped, never blocks).
+ */
+export async function visibleBalance({ rpcUrls, owner, token }) {
+  const viaProxy =
+    typeof window !== "undefined" && typeof window.fetch === "function" && window.location?.protocol?.startsWith("http");
+  const send = async (target, body) =>
+    (await fetch(target, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    })).json();
+  for (const url of rpcUrls ?? []) {
+    try {
+      const j = viaProxy
+        ? await send("/api/simulate", { rpcUrl: url, method: "starknet_call", params: { contract_address: token, entry_point: "balance_of", calldata: [owner], block_id: "latest" }, id: 1 })
+        : await send(url, { jsonrpc: "2.0", method: "starknet_call", params: { contract_address: token, entry_point: "balance_of", calldata: [owner], block_id: "latest" }, id: 1 });
+      if (j?.error) continue;
+      const arr = j?.result;
+      if (Array.isArray(arr) && arr.length >= 1) return BigInt(arr[0]);
+      if (typeof arr === "string") return BigInt(arr);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 const FELT_PATTERN = /^0x(?:0|[a-f1-9][a-f0-9]{0,62})$/i;
 const CALLDATA_PLACEHOLDER_PATTERN = /^\$\{(?:openNoteIds\[([0-9]+)\]|poolAddress)\}$/;
 

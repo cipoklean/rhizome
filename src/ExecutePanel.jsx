@@ -24,6 +24,7 @@ import {
   listWallets,
   rawSimulateInvoke,
   shieldedBalances,
+  visibleBalance,
 } from "./lib/wallet.mjs";
 
 /** Map a raw contract/pool revert string to plain English for the user. */
@@ -752,6 +753,29 @@ export default function ExecutePanel({
       }
     }
     setBusy(`invest-${i}`);
+    // Pre-flight: the paymaster funds the 6-STRK fee leg + gas from the
+    // VISIBLE balance. When it's empty the paymaster fails pre-flight with
+    // the generic 156 and nothing is broadcast — refuse early, plainly.
+    try {
+      const visible = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: net.tokens.STRK });
+      const MIN_VISIBLE = 20n * 10n ** 18n; // 6 fee + ~11 gas bounds + margin
+      if (visible != null && visible < MIN_VISIBLE) {
+        const have = Number(visible) / 1e18;
+        setBusy(null);
+        setVaultErrorCard({
+          piece: i + 1,
+          reason: `Wallet has only ${have.toFixed(2)} visible STRK. The vault move is funded from your VISIBLE balance (6 STRK fee leg + gas), not from the shielded pool. Add visible STRK to ${account.address.slice(0, 10)}… and retry.`,
+          feePattern: false,
+        });
+        say(
+          `Vault move blocked: only ${have.toFixed(2)} visible STRK — the paymaster funds the fee + gas from VISIBLE balance. Add ~25 STRK to your wallet and retry.`,
+          "err",
+        );
+        return;
+      }
+    } catch {
+      // Balance read failed (RPC down) — never block the move on it.
+    }
     try {
       await requireSelectedChain();
       const { transaction_hash } = await execute(account, investActionsFor(schedule[i]));
