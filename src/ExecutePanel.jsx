@@ -836,6 +836,42 @@ export default function ExecutePanel({
             console.error("vault-fail error shape:", serializeCause(e));
           }
         } catch {}
+        // 4H: the paymaster hides its exact rejection reasons in non-standard
+        // array/object fields (errorMessages, context) that the serializer
+        // above never reads. Extract them so the user sees WHY the paymaster
+        // refused, not just the generic 156/163 wrapper.
+        let paymasterErrors = [];
+        try {
+          const extractDetailedErrors = (node, depth = 0, seen = new Set(), out = []) => {
+            if (!node || typeof node !== "object" || seen.has(node) || depth > 6) return out;
+            seen.add(node);
+            for (const key of ["errorMessages", "error_messages", "errors"]) {
+              const v = node[key];
+              if (Array.isArray(v)) {
+                for (const item of v) {
+                  const s = typeof item === "string" ? item : item?.message ?? item?.reason ?? JSON.stringify(item);
+                  if (s && typeof s === "string") out.push(s);
+                }
+              } else if (typeof v === "string" && v.length > 0) {
+                out.push(v);
+              }
+            }
+            for (const key of ["cause", "originalError", "error", "context"]) {
+              extractDetailedErrors(node[key], depth + 1, seen, out);
+            }
+            return out;
+          };
+          paymasterErrors = extractDetailedErrors(e);
+        } catch {}
+        if (typeof console !== "undefined") {
+          if (paymasterErrors.length > 0) {
+            console.log("Paymaster detailed errors:", paymasterErrors);
+          } else {
+            // 4H fallback: no errorMessages anywhere — dump context + cause
+            // raw; the paymaster may have nested the reasons there.
+            console.log("Paymaster detailed errors: none — full context:", e?.context, "| cause:", e?.cause);
+          }
+        }
         // 4F: the on-chain receipt of the failed invoke is the remaining
         // truth. Wallets often return the hash even when they report an
         // error — walk the same cause chain and capture any tx hash so the
@@ -875,6 +911,7 @@ export default function ExecutePanel({
           reason: String(reason),
           feePattern,
           txHash: failedTxHash,
+          paymasterErrors,
         });
         say(`Piece ${i + 1} vault move failed: ${humanizeRevert(reason)}`, "err");
       }
@@ -1390,6 +1427,29 @@ export default function ExecutePanel({
                 The wrapper hides the reason — run Deep Simulate to read the exact on-chain revert.
               </p>
             </>
+          )}
+          {vaultErrorCard.paymasterErrors?.length > 0 && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: "8px 10px",
+                border: "1px solid var(--error)",
+                borderRadius: 6,
+                fontFamily: "var(--mono)",
+                fontSize: 12,
+                color: "var(--error)",
+                direction: "ltr",
+              }}
+            >
+              Paymaster rejection reasons:
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {vaultErrorCard.paymasterErrors.map((s, idx) => (
+                  <li key={idx} style={{ wordBreak: "break-word" }}>
+                    {s}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           <button
             type="button"
