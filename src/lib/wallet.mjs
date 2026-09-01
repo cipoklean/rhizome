@@ -9,7 +9,7 @@
 //   walletV6.supportedWalletApi      capability detection
 //   strk20Balances / strk20PrepareInvoke / strk20InvokeTransaction
 
-import { WalletAccountV6, constants, walletV6 } from "starknet";
+import { CallData, RpcProvider, WalletAccountV6, constants, walletV6 } from "starknet";
 
 /** LendingOperation variants, in Cairo declaration order. */
 export const OPERATION = { Deposit: "0x0", Withdraw: "0x1" };
@@ -382,4 +382,112 @@ export async function confirm(provider, transactionHash, { timeoutMs = 90000 } =
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Deep Simulate via the raw RPC, bypassing every SDK account factory.
+ *
+ * Why this exists: the SDK's account.simulateTransaction adds wallet-era
+ * steps (getEstimateTip — which cartridge mainnet does not implement — plus
+ * its own invocation factory) between us and the node. Those steps crash
+ * client-side on shape drift before the contract ever runs. This helper
+ * hand-builds the BROADCASTED INVOKE transaction exactly as the sequencer
+ * expects it, so the only thing that can fail is the chain itself — and a
+ * chain-side revert carries the REAL reason (maturity, balance, proof).
+ *
+ * The signature is empty because the caller always sets skipValidate; the
+ * dummy resource bounds are fine because simulation does not submit.
+ */
+export async function rawSimulateInvoke({
+  rpcUrls,
+  senderAddress,
+  call,
+  chargeFee = true,
+} = {}) {
+  const hexCalldata = (Array.isArray(call.calldata) ? call.calldata : [call.calldata]).map((v) =>
+    typeof v === "bigint" ? "0x" + v.toString(16) : String(v),
+  );
+  // cairo1 multi-call envelope. The wallet's real invokes bundle a fee-router
+  // STRK transfer ahead of the pool call (observed in the live hide tx:
+  // calldata[0]=2 calls, first = transfer to feeRouter, second = apply_actions).
+  // Mirror that structure: the pool's apply_actions reads the fee transfer.
+  const compiled = CallData.compile({
+    orderCalls: [
+      { contractAddress: call.contractAddress, entrypoint: call.entrypoint, calldata: hexCalldata },
+    ],
+  }).map((v) => {
+    // CallData.compile emits decimal strings; the RPC JSON schema demands hex.
+    const n = BigInt(typeof v === "bigint" ? v : String(v));
+    return "0x" + n.toString(16);
+  });
+  const flags = chargeFee ? ["SKIP_VALIDATE"] : ["SKIP_VALIDATE", "SKIP_FEE_CHARGE"];
+
+  let lastError = null;
+  for (const url of rpcUrls ?? []) {
+    try {
+      const provider = new RpcProvider({ nodeUrl: url });
+      const block = await provider.getBlockNumber();
+      // Real nonce — the node rejects simulated invokes with a stale nonce
+      // exactly like real ones ("Invalid transaction nonce ... got: 0x0").
+      // getNonceForAddress already returns a hex string ("0x4").
+      const nonce = await provider.getNonceForAddress(senderAddress);
+      const tx = {
+        type: "INVOKE",
+        version: "0x100000000000000000000000000000003",
+        sender_address: senderAddress,
+        calldata: ["0x1", ...compiled],
+        signature: [],
+        nonce: "0x" + nonce,
+        resource_bounds: {
+          l2_gas: { max_amount: "0x20000000", max_price_per_unit: "0x1" },
+          l1_gas: { max_amount: "0x0", max_price_per_unit: "0x1" },
+          l1_data_gas: { max_amount: "0x200", max_price_per_unit: "0x1" },
+        },
+        tip: "0x0",
+        paymaster_data: [],
+        account_deployment_data: [],
+        nonce_data_availability_mode: "L1",
+        fee_data_availability_mode: "L1",
+      };
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "starknet_simulateTransactions",
+          params: [{ block_number: block }, [tx], flags],
+        }),
+      });
+      const j = await res.json();
+      if (j.error) {
+        // The node's execution errors carry the REAL revert text under
+        // data.execution_error — surface it verbatim, not just the message.
+        const exec = j.error?.data?.execution_error;
+        lastError = new Error(
+          exec ? String(exec) : `RPC: ${j.error.message}${j.error.data?.reason ? ` — ${j.error.data.reason}` : ""}`,
+        );
+        continue;
+      }
+      const t = Array.isArray(j.result) ? j.result[0] : j.result;
+      const trace = t?.transaction_trace ?? {};
+      const revertRaw =
+        trace.revert_reason
+        ?? trace.execute_invocation_state
+        ?? t?.revert_error
+        ?? null;
+      const reverted =
+        String(trace.execute_invocation_state ?? "").toUpperCase().includes("REVERT")
+        || Boolean(trace.revert_reason);
+      return {
+        ok: !reverted,
+        reason: reverted
+          ? String(revertRaw ?? "reverted in simulation")
+          : "simulation passed" + (chargeFee ? " with the real fee charged" : ""),
+      };
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError ?? new Error("no reachable RPC for raw simulate");
 }

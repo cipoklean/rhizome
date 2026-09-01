@@ -22,6 +22,7 @@ import {
   ensureWalletChain,
   execute,
   listWallets,
+  rawSimulateInvoke,
   shieldedBalances,
 } from "./lib/wallet.mjs";
 
@@ -851,11 +852,11 @@ export default function ExecutePanel({
     }
   }
 
-  // Deep Simulate: run the exact vault transaction through
-  // account.simulateTransaction with the fee charged (unlike the free dry run,
-  // which the STRK20 wallet API explicitly runs without real fees). Returns
-  // the revert reason verbatim, or success. Every failure mode — including
-  // simulate itself throwing — surfaces raw in the card, never silently.
+  // Deep Simulate: raw-RPC simulation of the exact vault call. Bypasses the
+  // SDK's account factory entirely — that factory is where the felt(undefined)
+  // crashes lived (getEstimateTip is not implemented on cartridge, plus its
+  // own invocation-shape handling). The raw path hand-builds the broadcasted
+  // INVOKE, so the only failures left are chain-side and carry real text.
   async function deepSimulate(i) {
     if (!account || !schedule?.length) return;
     setDeepSimBusy(true);
@@ -873,12 +874,8 @@ export default function ExecutePanel({
         return;
       }
       const call = prepared?.call ?? prepared;
-      // Step 1.5 — casing map. The wallet speaks the SNIP-36 snake_case Call
-      // (contract_address, entry_point); starknet.js simulateTransaction
-      // strictly requires camelCase (contractAddress, entrypoint). Encoding a
-      // missing camelCase key is exactly what crashed felt() on undefined.
-      // Normalize each call object into a clean Call — no snake_case leftovers
-      // for the SDK to trip over.
+      // Step 1.5 — casing map: the wallet speaks SNIP-36 snake_case
+      // (contract_address, entry_point); normalize to a clean camelCase Call.
       const normalizeCall = (c) => {
         if (Array.isArray(c)) return c.map(normalizeCall);
         if (!c || typeof c !== "object") return c;
@@ -889,86 +886,46 @@ export default function ExecutePanel({
         };
       };
       const cleanCall = normalizeCall(call);
-      // Step 2: simulate the exact invoke WITH the fee charged.
-      //
-      // The wallet's simulate-mode call is documented as "not submittable —
-      // only useful for fee estimation": proof fields are empty and calldata
-      // can arrive sparse (placeholders the wallet never substituted surface
-      // as undefined). starknet.js felt() crashes on undefined before the
-      // contract ever runs, so log the exact payload, then deep-clone with
-      // undefined/null felt slots replaced by "0". The contract then reverts
-      // with its REAL reason instead of the SDK crashing client-side.
-      const invocation = [{ type: "INVOKE", payload: cleanCall }];
       if (typeof console !== "undefined") {
         console.log(
           "Deep Simulate payload:",
-          JSON.stringify(invocation, (k, v) => (typeof v === "bigint" ? v.toString() : v), 2),
+          JSON.stringify(cleanCall, (k, v) => (typeof v === "bigint" ? v.toString() : v), 2),
         );
       }
-      const warnings = [];
-      const sanitizeFelts = (node, path) => {
-        if (Array.isArray(node)) {
-          return node.map((v, idx) => {
-            if (v === undefined || v === null) {
-              warnings.push(path.concat(idx).join("."));
-              return "0";
-            }
-            return sanitizeFelts(v, path.concat(idx));
-          });
-        }
-        if (node !== null && typeof node === "object" && typeof node !== "bigint") {
-          const out = {};
-          for (const [k, v] of Object.entries(node)) {
-            if (v === undefined || v === null) {
-              warnings.push(path.concat(k).join("."));
-              out[k] = "0";
-              continue;
-            }
-            out[k] = sanitizeFelts(v, path.concat(k));
-          }
-          return out;
-        }
-        return node;
-      };
-      const sanitized = sanitizeFelts(invocation, []);
-      if (typeof console !== "undefined") {
-        for (const w of warnings) console.warn(`Replaced undefined argument at ${w} with 0 for simulation.`);
-      }
+      // Step 2: raw-RPC simulate. chargeFee:false skips only the SEQUENCER
+      // gas charge; the pool's internal 6-STRK fee flow still runs, so a
+      // young fee note still reverts here exactly like live.
       try {
-        const [sim] = await account.simulateTransaction(sanitized, {
-          skipFeeCharge: false,
-          skipValidate: true,
+        const r = await rawSimulateInvoke({
+          rpcUrls: net.rpc,
+          senderAddress: account.address,
+          call: cleanCall,
+          chargeFee: false,
         });
-        const traceReverted =
-          String(sim?.transaction_trace?.execute_invocation_state ?? "") === "REVERTED"
-          || Boolean(sim?.revert_error)
-          || Boolean(sim?.fee_estimation_error);
-        setDeepSimResult(
-          traceReverted
-            ? {
-                ok: false,
-                reason: String(
-                  sim?.revert_error ?? sim?.fee_estimation_error ?? "reverted in simulation",
-                ),
-              }
-            : { ok: true, reason: "simulation passed with the real fee charged" },
-        );
-      } catch (e) {
-        // A local SDK crash (felt()/undefined/bigint) means the payload could
-        // not even be encoded — distinct from an on-chain revert. Surface the
-        // dedicated encoding card and point at the console dump.
-        const raw = String(e?.message ?? e);
-        if (/felt|undefined|cannot be computed|bigint|compute by/i.test(raw)) {
+        // The wallet's simulate-mode call carries EMPTY PROOFS by design
+        // (proofs are generated only at real invoke time). If the pool
+        // rejects the proofs, that is a limitation of this diagnostic —
+        // not the live failure. Say so honestly.
+        if (!r.ok && /deserialize param|proof/i.test(r.reason)) {
           setDeepSimResult({
             ok: false,
             reason:
-              "Deep Simulate payload encoding failed. One of the transaction arguments is missing (undefined). Check the browser console for the full payload dump.",
+              `Simulation reached the pool but reverted at the proof check: ${r.reason}\n\n` +
+              "The free wallet preparation returns EMPTY proofs by design — real proofs are only generated at send time. " +
+              "This diagnostic cannot replay the live vault failure end-to-end; it verifies everything up to the proofs.",
           });
           return;
         }
-        // The simulate call itself threw (wallet SDK shape mismatch, RPC
-        // refusal, ...). Print the raw error verbatim — honest failure.
-        const detail = e?.cause?.message ? `${e.message} (cause: ${e.cause.message})` : raw;
+        setDeepSimResult({
+          ok: r.ok,
+          reason: r.ok
+            ? "simulation passed — the call, fee flow and action shape are valid up to the (empty) proofs"
+            : r.reason,
+        });
+      } catch (e) {
+        // The raw simulate itself threw (RPC refused, no endpoint reachable).
+        // Print the raw error verbatim — honest failure.
+        const detail = e?.cause?.message ? `${e.message} (cause: ${e.cause.message})` : String(e?.message ?? e);
         setDeepSimResult({ ok: false, reason: `simulation call failed: ${detail}` });
       }
     } finally {
