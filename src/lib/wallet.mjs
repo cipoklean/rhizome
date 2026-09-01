@@ -431,6 +431,136 @@ export async function confirm(provider, transactionHash, { timeoutMs = 90000 } =
  * The signature is empty because the caller always sets skipValidate; the
  * dummy resource bounds are fine because simulation does not submit.
  */
+// ── shared proxy RPC plumbing ──────────────────────────────────────────────
+// Route browser POSTs through the Vercel proxy (api/simulate.js): public
+// Starknet RPCs block direct browser POSTs via CORS, so the app talks to
+// /api/simulate and the proxy relays server-side. In Node (tests/scripts)
+// there is no CORS, so we call the RPC directly.
+export const rpcViaProxy = () =>
+  typeof window !== "undefined" &&
+  typeof window.fetch === "function" &&
+  String(window.location?.protocol ?? "").startsWith("http");
+
+/** JSON-RPC POST that transparently uses the Vercel proxy in the browser. */
+export async function rpcFetch(url, method, params) {
+  const send = async (target, body) => {
+    const res = await fetch(target, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.json();
+  };
+  if (!rpcViaProxy()) {
+    return send(url, { jsonrpc: "2.0", method, params, id: 1 });
+  }
+  const j = await send("/api/simulate", { rpcUrl: url, method, params, id: 1 });
+  if (j?.proxyError) throw new Error(String(j.error ?? "proxy failure"));
+  return j;
+}
+
+/** Numeric felt comparison — on-chain addresses drop leading zeros. */
+const sameAddr = (a, b) => {
+  try {
+    return BigInt(a) === BigInt(b);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * 4K BUG B primitive: find pool transactions a given owner sent recently.
+ *
+ * Scans the pool's events over a recent block window, groups by tx hash, and
+ * returns the owner's transactions with their receipt status. This is what
+ * reconciles a wallet-reported "failure" with what actually landed.
+ */
+export async function recentPoolTxs({ rpcUrls, owner, pool, sinceBlock } = {}) {
+  if (!rpcUrls?.length || !owner || !pool) return [];
+  let lastError = null;
+  for (const url of rpcUrls) {
+    try {
+      const block = (await rpcFetch(url, "starknet_blockNumber", [])).result;
+      if (typeof block !== "number") throw new Error("blockNumber unavailable");
+      const fromBlock = Number.isFinite(sinceBlock)
+        ? Math.max(0, block - sinceBlock)
+        : Math.max(0, block - 600); // ~2.5h of mainnet blocks — enough to catch a slow tx
+      const scan = async (continuation) =>
+        rpcFetch(url, "starknet_getEvents", {
+          filter: {
+            from_block: { block_number: fromBlock },
+            to_block: "latest",
+            address: pool,
+            chunk_size: 100,
+            ...(continuation ? { continuation_token: continuation } : {}),
+          },
+        });
+      // Paginate via the filter's continuation_token (verified live: the
+      // token goes inside the filter object; a top-level param is "Invalid
+      // params"). Cap at 5 chunks so a busy pool can't turn the reconcile
+      // into an unbounded crawl.
+      const events = [];
+      let continuation = null;
+      for (let chunk = 0; chunk < 5; chunk++) {
+        const page = await scan(continuation);
+        if (page?.error) throw new Error(String(page.error?.message ?? "getEvents failed"));
+        events.push(...(page?.result?.events ?? []));
+        continuation = page?.result?.continuation_token ?? null;
+        if (!continuation) break;
+      }
+      const seen = new Set();
+      const out = [];
+      for (const e of events) {
+        const h = e.transaction_hash;
+        if (!h || seen.has(h)) continue;
+        seen.add(h);
+        const rc = await rpcFetch(url, "starknet_getTransactionReceipt", { transaction_hash: h });
+        const rec = rc?.result ?? {};
+        // Owner match: paymaster-funded txs are SENT by the relayer account,
+        // but the owner's account contract still emits its own event inside
+        // the tx (observed in the live hide receipt: the user's account emits
+        // alongside the relayer). A receipt event from the owner's address is
+        // the honest "the user did this" marker.
+        const ownerEvent = (rec.events ?? []).some((ev) => sameAddr(ev.from_address, owner));
+        if (!ownerEvent) continue;
+        const tx = await rpcFetch(url, "starknet_getTransactionByHash", { transaction_hash: h });
+        out.push({
+          hash: h,
+          block: rec.block_number ?? e.block_number ?? null,
+          status: rec.execution_status ?? "UNKNOWN",
+          sender: tx?.result?.sender_address ?? null,
+          receipt: rec,
+        });
+      }
+      return out;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (lastError) throw lastError;
+  return [];
+}
+
+/**
+ * Pure decision core of 4K BUG B: given the chain-scan results and the
+ * current block, pick the SUCCEEDED tx that the wallet's "failure" hid.
+ * Exported for unit tests — no network, deterministic.
+ */
+export function pickLandedPoolTx(txs, currentBlock, window = 120) {
+  if (!Array.isArray(txs) || txs.length === 0) return null;
+  const floor = Number.isFinite(currentBlock) ? currentBlock - window : -Infinity;
+  const landed = txs.filter(
+    (t) =>
+      t?.status === "SUCCEEDED" &&
+      t?.block != null &&
+      Number(t.block) >= floor,
+  );
+  if (landed.length === 0) return null;
+  // newest first
+  landed.sort((a, b) => Number(b.block) - Number(a.block));
+  return landed[0];
+}
+
 export async function rawSimulateInvoke({
   rpcUrls,
   senderAddress,
@@ -454,27 +584,6 @@ export async function rawSimulateInvoke({
     return "0x" + n.toString(16);
   });
   const flags = chargeFee ? ["SKIP_VALIDATE"] : ["SKIP_VALIDATE", "SKIP_FEE_CHARGE"];
-
-  // Route browser POSTs through the Vercel proxy (api/simulate.js): public
-  // Starknet RPCs block direct browser POSTs via CORS, so the app talks to
-  // /api/simulate and the proxy relays server-side. In Node (tests/scripts)
-  // there is no CORS, so we call the RPC directly.
-  const rpcViaProxy =
-    typeof window !== "undefined" && typeof window.fetch === "function" && window.location?.protocol?.startsWith("http");
-  const rpcFetch = async (url, method, params) => {
-    const send = async (target, body) =>
-      (await fetch(target, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      })).json();
-    if (!rpcViaProxy) {
-      return send(url, { jsonrpc: "2.0", method, params, id: 1 });
-    }
-    const j = await send("/api/simulate", { rpcUrl: url, method, params, id: 1 });
-    if (j?.proxyError) throw new Error(String(j.error ?? "proxy failure"));
-    return j;
-  };
 
   let lastError = null;
   for (const url of rpcUrls ?? []) {

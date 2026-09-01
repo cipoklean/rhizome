@@ -8,6 +8,7 @@ import {
   canonicalFelt,
   ensureWalletChain,
   execute,
+  pickLandedPoolTx,
   resolveChainId,
   sameChain,
   supportsStrk20PrivateDefiVersion,
@@ -192,4 +193,30 @@ test("a slow-but-successful wallet answer still wins the race", async () => {
     { timeoutMs: 2000 },
   );
   assert.equal(result.transaction_hash, "0xabc");
+});
+
+// ── 4K BUG B: wallet error + chain reconciliation ──────────────────────────
+test("pickLandedPoolTx: wallet error + chain shows SUCCEEDED in window -> reconcile success", () => {
+  const txs = [
+    { hash: "0xold", status: "SUCCEEDED", block: 1000 },
+    { hash: "0xreverted", status: "REVERTED", block: 1120 },
+    { hash: "0xnew", status: "SUCCEEDED", block: 1115 },
+  ];
+  const picked = pickLandedPoolTx(txs, 1200, 120);
+  assert.equal(picked.hash, "0xnew", "newest in-window SUCCEEDED tx wins");
+});
+
+test("pickLandedPoolTx: wallet error + no matching activity -> null (failure card)", () => {
+  assert.equal(pickLandedPoolTx([], 1200), null, "empty scan -> null");
+  assert.equal(
+    pickLandedPoolTx([{ hash: "0xa", status: "REVERTED", block: 1150 }], 1200, 120),
+    null,
+    "reverted tx never reconciles",
+  );
+  assert.equal(
+    pickLandedPoolTx([{ hash: "0xb", status: "SUCCEEDED", block: 100 }], 1200, 120),
+    null,
+    "SUCCEEDED outside the window never reconciles",
+  );
+  assert.equal(pickLandedPoolTx(null, 1200), null, "garbage scan -> null");
 });

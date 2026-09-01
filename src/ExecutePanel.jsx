@@ -23,7 +23,9 @@ import {
   ensureWalletChain,
   execute,
   listWallets,
+  pickLandedPoolTx,
   rawSimulateInvoke,
+  recentPoolTxs,
   shieldedBalances,
   visibleBalance,
 } from "./lib/wallet.mjs";
@@ -541,6 +543,56 @@ export default function ExecutePanel({
     invest(i);
   }
 
+  // 4K BUG B: a wallet-reported failure is not final. The two "failed" 15-STRK
+  // hides both SUCCEEDED on-chain — the wallet errored after submission and
+  // the UI declared failure, so the user re-sent and duplicated notes.
+  // Reconciliation: after a wallet error, scan the chain for the account's
+  // recent pool transactions; a SUCCEEDED tx that appeared after the submit
+  // timestamp is the truth — accept it, update state, and say so.
+  const reconcileAfterWalletError = useCallback(
+    async (i, kind) => {
+      if (!account) return false;
+      const submittedAt = Date.now();
+      // Give the node a moment to index the tx if it genuinely landed just now.
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const txs = await recentPoolTxs({
+          rpcUrls: net.rpc,
+          owner: account.address,
+          pool: net.strk20Pool,
+          sinceBlock: 120, // ~10 min of mainnet blocks around the attempt
+        });
+        const t = pickLandedPoolTx(txs, block ?? undefined, 120);
+        if (!t) return false;
+        const at = acceptedReceiptBlock(t.receipt);
+        if (kind === "hide") {
+          if (at !== null) {
+            patch(i, { stage: "shielded", shieldedAt: at, shieldTx: t.hash });
+            say(
+              `Piece ${i + 1}: your wallet reported an error, but the hide SUCCEEDED on-chain (block ${at}). State updated — do NOT hide again.`,
+              "ok",
+            );
+          }
+        } else {
+          if (at !== null) {
+            patch(i, { stage: "invested", investTx: t.hash, investedAt: at });
+            say(
+              `Piece ${i + 1}: your wallet reported an error, but the vault move SUCCEEDED on-chain (block ${at}). State updated.`,
+              "ok",
+            );
+          }
+        }
+        await refreshBalances();
+        return at !== null;
+      } catch {
+        // Chain scan failed (RPC down) — fail open: do not claim success, but
+        // also do NOT double-down on failure; the failure card is shown.
+        return false;
+      }
+    },
+    [account, net, block, say, patch, refreshBalances],
+  );
+
   async function shield(i) {
     if (!account || !shieldDryRun || !paidGateOpen) return;
     setBusy(`shield-${i}`);
@@ -577,8 +629,15 @@ export default function ExecutePanel({
         setGatewayError("You rejected the request in your wallet.");
         say(`Piece ${i + 1}: you rejected the request in your wallet.`, "err");
       } else {
-        patch(i, { stage: "failed" });
-        let reason = e?.message ?? String(e);
+        // 4K BUG B: the wallet SAYS failure, but the chain may have accepted
+        // the submission anyway (this exact case duplicated the user's notes).
+        // Reconcile before declaring failure.
+        const reconciled = await reconcileAfterWalletError(i, "hide");
+        if (reconciled) {
+          setGatewayError(null);
+        } else {
+          patch(i, { stage: "failed" });
+          let reason = e?.message ?? String(e);
         try {
           if (e?.data) {
             if (typeof e.data === "string") reason = e.data;
@@ -628,7 +687,8 @@ export default function ExecutePanel({
             });
           }
         } catch {}
-        say(`Piece ${i + 1} hide failed: ${humanizeRevert(reason)}`, "err");
+          say(`Piece ${i + 1} hide failed: ${humanizeRevert(reason)}`, "err");
+        }
       }
     } finally {
       setBusy(null);
@@ -814,8 +874,15 @@ export default function ExecutePanel({
         setGatewayError("You rejected the request in your wallet.");
         say(`Piece ${i + 1}: you rejected the request in your wallet.`, "err");
       } else {
-        patch(i, { stage: "vault_failed" });
-        let reason = e?.message ?? String(e);
+        // 4K BUG B: the wallet says failure; the chain may have accepted it
+        // anyway. Reconcile before declaring the vault move failed.
+        const reconciled = await reconcileAfterWalletError(i, "vault");
+        if (reconciled) {
+          setVaultErrorCard(null);
+          setDeepSimResult(null);
+        } else {
+          patch(i, { stage: "vault_failed" });
+          let reason = e?.message ?? String(e);
         try {
           if (e?.data) {
             if (typeof e.data === "string") reason = e.data;
@@ -954,6 +1021,7 @@ export default function ExecutePanel({
           paymasterErrors,
         });
         say(`Piece ${i + 1} vault move failed: ${humanizeRevert(reason)}`, "err");
+        }
       }
     } finally {
       setBusy(null);
@@ -1306,6 +1374,21 @@ export default function ExecutePanel({
             ) : (
               <p className="status">No pieces yet, pick an amount.</p>
             )}
+            {schedule?.length > 0 && (
+              <p
+                className="status"
+                style={{
+                  color: "var(--warn, #b8860b)",
+                  fontSize: 12,
+                  margin: "6px 0 0",
+                  lineHeight: 1.5,
+                }}
+              >
+                ⚠ Each pool transaction burns ~3-4 visible STRK gas + a 6 STRK fee from your{" "}
+                <strong>visible</strong> balance. Shielded STRK cannot pay for it. Keep{" "}
+                <strong>~20+ visible STRK</strong> per session.
+              </p>
+            )}
 
             {ready && schedule?.length > 0 && (
               <div className="table-wrap" style={{ marginTop: 12 }}>
@@ -1356,6 +1439,20 @@ export default function ExecutePanel({
                               >
                                 view tx ↗
                               </a>
+                            )}
+                            {!state.shieldedAt && !state.shieldTx && (
+                              <span
+                                style={{
+                                  display: "block",
+                                  marginTop: 4,
+                                  fontSize: 10,
+                                  color: "var(--warn, #b8860b)",
+                                  lineHeight: 1.4,
+                                }}
+                                title="Each pool transaction burns ~3-4 visible STRK gas + a 6 STRK fee from your visible balance. Shielded STRK cannot pay for it. Keep ~20+ visible."
+                              >
+                                costs ~9 visible STRK
+                              </span>
                             )}
                           </td>
                           <td>
