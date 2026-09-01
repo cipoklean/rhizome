@@ -232,6 +232,23 @@ export function noteMaturityGate({ knownBlocks, currentBlock, maturity = 10 } = 
 
 
 /**
+ * Single source of truth for the visible-STRK a vault move needs (4J-REV).
+ *
+ * Verified on-chain: each pool transaction is funded from the VISIBLE balance —
+ * the 6-STRK fee leg (transfer to the fee router) plus ~3.2 STRK gas observed
+ * on real pool txs (3.04-3.25). Shielded STRK funds neither. Pre-flight gate
+ * (9675cd3) and the dual-balance readout must agree; when the RPC is down the
+ * caller falls back to {@link VISIBLE_REQ_FALLBACK} and never blocks.
+ */
+export const VISIBLE_REQ_FALLBACK = 92n * 10n ** 17n; // 9.2 STRK
+
+export function visibleRequirement(feeWei, gasWei) {
+  const fee = BigInt(feeWei ?? 6n * 10n ** 18n); // pool fee per apply_actions call
+  const gas = BigInt(gasWei ?? 32n * 10n ** 17n); // ~3.2 STRK observed gas
+  return fee + gas; // 9.2e18 wei = 9.2 STRK
+}
+
+/**
  * Derive the STRK reserve required to keep every analyzed public amount intact.
  *
  * Upstream `privacy.cairo` runs `collect_fee()` before `_apply_actions()`: the

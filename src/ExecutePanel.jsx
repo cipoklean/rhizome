@@ -6,6 +6,7 @@ import {
   noteMaturityGate,
   readExecutionProgress,
   reconcileInFlightLegs,
+  visibleRequirement,
   writeExecutionProgress,
 } from "./lib/execution.mjs";
 import { connect } from "./lib/pool.mjs";
@@ -123,6 +124,28 @@ export default function ExecutePanel({
   const delayBlocks = isRehearsal
     ? NOTE_MATURITY_BLOCKS
     : Math.min(30, Math.max(NOTE_MATURITY_BLOCKS, waitBlocks));
+  // 4J-REV: visible STRK alongside shielded, read through the 4G proxy.
+  // Fails open — unknown balance renders "· Visible: ?" and never blocks.
+  const visibleReqWei = visibleRequirement(net.observed?.feeAmountWei);
+  const [visibleStrk, setVisibleStrk] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!account) {
+      setVisibleStrk(null);
+      return;
+    }
+    (async () => {
+      try {
+        const v = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: net.tokens.STRK });
+        if (!cancelled) setVisibleStrk(v);
+      } catch {
+        if (!cancelled) setVisibleStrk(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [account, net.rpc, net.tokens.STRK]);
   const shieldedStrkBalance = useMemo(() => {
     if (!Array.isArray(balances)) return null;
     try {
@@ -833,8 +856,8 @@ export default function ExecutePanel({
     // early, plainly, with real numbers instead of padded ones.
     try {
       const visible = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: net.tokens.STRK });
-      // 6 STRK fee leg + ~3 STRK gas (actual hide txs paid 3.0-3.2) + dust.
-      const MIN_VISIBLE = 92n * 10n ** 16n; // 9.2 STRK
+      // Same source as the Step-5 readout (4J-REV): 6 STRK fee leg + ~3.2 gas.
+      const MIN_VISIBLE = visibleRequirement(net.observed?.feeAmountWei);
       if (visible != null && visible < MIN_VISIBLE) {
         const have = Number(visible) / 1e18;
         setBusy(null);
@@ -1384,9 +1407,32 @@ export default function ExecutePanel({
                   lineHeight: 1.5,
                 }}
               >
-                ⚠ Each pool transaction burns ~3-4 visible STRK gas + a 6 STRK fee from your{" "}
-                <strong>visible</strong> balance. Shielded STRK cannot pay for it. Keep{" "}
-                <strong>~20+ visible STRK</strong> per session.
+                Visible STRK pays the bills: each hide burns ~3-4 STRK gas; the
+                vault move needs ≥ ~9.2 visible (6 STRK fee + ~3.2 gas).
+                Shielded STRK cannot pay for either.
+              </p>
+            )}
+
+            {account && schedule?.length > 0 && (
+              <p
+                className="status"
+                aria-label="Shielded and visible STRK balances"
+                style={{
+                  fontSize: 12,
+                  margin: "4px 0 0",
+                  lineHeight: 1.5,
+                  color:
+                    visibleStrk != null && visibleStrk < visibleReqWei
+                      ? "var(--warn, #b8860b)"
+                      : "var(--ghost, inherit)",
+                }}
+              >
+                Shielded: {shieldedStrkBalance != null ? `${(Number(shieldedStrkBalance) / 1e18).toFixed(2)} STRK` : "?"}{" "}
+                · Visible: {visibleStrk != null ? `${(Number(visibleStrk) / 1e18).toFixed(2)} STRK` : "?"}{" "}
+                (vault needs ≥ {(Number(visibleReqWei) / 1e18).toFixed(1)})
+                {visibleStrk != null && visibleStrk < visibleReqWei && (
+                  <strong> — add visible STRK before entering the vault</strong>
+                )}
               </p>
             )}
 
@@ -1449,9 +1495,9 @@ export default function ExecutePanel({
                                   color: "var(--warn, #b8860b)",
                                   lineHeight: 1.4,
                                 }}
-                                title="Each pool transaction burns ~3-4 visible STRK gas + a 6 STRK fee from your visible balance. Shielded STRK cannot pay for it. Keep ~20+ visible."
+                                title="Visible STRK pays the bills: each hide burns ~3-4 STRK gas; the vault move needs ≥ ~9.2 visible (6 STRK fee + ~3.2 gas). Shielded STRK cannot pay for either."
                               >
-                                costs ~9 visible STRK
+                                hides burn ~3-4 visible STRK gas
                               </span>
                             )}
                           </td>

@@ -250,6 +250,16 @@ Engineering notes only — items intentionally not shipped in the hackathon buil
   and cannot catch this. The app now guards it pre-flight (blocks the submit
   with a live countdown) and maps paymaster error 156 to an honest
   explanation with a Deep Simulate escape hatch.
+- **Visible-STRK funding (live incident, 2026-09)** — pool transactions are
+  funded from the VISIBLE balance, never the shielded one: each hide burns
+  ~3.2 STRK gas (observed 3.04–3.25), and the vault move additionally draws a
+  6 STRK fee leg plus ~3.2 gas (≥ ~9.2 visible total). The app now pre-flights
+  the visible balance before a vault submit, warns on the plan screen and at
+  every hide button, and reconciles wallet-reported failures against the chain
+  (a wallet "error" is not final — if the tx actually landed SUCCEEDED, the
+  state updates instead of inviting a duplicate hide). Added after a live
+  incident involving a misread balance and misreported wallet failures that
+  duplicated two hides.
 - **M1-5 cohort consolidation** — guardrail abort: making `roundTripCohort` the
   single source of truth changed per-leg vs aggregate scoring and diverged 9
   tests; reverted rather than risk the privacy math.

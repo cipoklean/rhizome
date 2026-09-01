@@ -9,6 +9,8 @@ import {
   readExecutionProgress,
   reconcileInFlightLegs,
   sanitizeExecutionProgress,
+  visibleRequirement,
+  VISIBLE_REQ_FALLBACK,
   writeExecutionProgress,
 } from "../src/lib/execution.mjs";
 
@@ -370,4 +372,32 @@ test("reconcile resets in-flight vault legs with no hash, keeps hashed ones", ()
   assert.ok(progress[0].shieldedAt != null, "its hide evidence is preserved");
   assert.equal(progress[1].stage, "invest-pending", "hashed leg stays in-flight");
   assert.equal(progress[2].stage, "invested", "done legs are never touched");
+});
+
+// ── 4J-REV: visible-STRK requirement (single source of truth) ──────────────
+test("visibleRequirement: 6 fee + 3.2 gas = 9.2 STRK, with fallbacks", () => {
+  // Default (observed mainnet values): fee 6 + gas 3.2 = 9.2 STRK.
+  assert.equal(visibleRequirement(), 92n * 10n ** 17n);
+  assert.equal(VISIBLE_REQ_FALLBACK, visibleRequirement());
+  // A network's own fee flows through: fee 2 + gas 3.2 = 5.2.
+  assert.equal(visibleRequirement(2n * 10n ** 18n), 52n * 10n ** 17n);
+  // Strings from config JSON are accepted like BigInts.
+  assert.equal(visibleRequirement("6000000000000000000"), 92n * 10n ** 17n);
+  // Zero-fee networks still require gas only.
+  assert.equal(visibleRequirement(0n), 32n * 10n ** 17n);
+});
+
+test("visibleRequirement: amber vs neutral readout thresholds", () => {
+  const req = visibleRequirement(); // 9.2 STRK
+  // Amber state: below the requirement (the incident: user at ~11 was fine;
+  // 9.0 would warn but not block — the gate refuses only < req).
+  const below = 90n * 10n ** 16n;
+  assert.ok(below < req, "9.0 visible renders amber (below 9.2)");
+  const atReq = req;
+  assert.ok(!(atReq < req), "9.2 visible renders neutral (meets the requirement)");
+  const above = 11_130_000_000_000_000_000n; // 11.13 (the user's actual balance)
+  assert.ok(!(above < req), "11.13 visible renders neutral");
+  // RPC down: null balance renders "?" and never blocks.
+  const unknown = null;
+  assert.ok(!(unknown != null && unknown < req), "unknown balance fails open");
 });
