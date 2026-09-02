@@ -116,6 +116,9 @@ export default function ExecutePanel({
 
   const anonymizer = net.anonymizer;
   const vToken = net.vesu?.vTokens?.STRK ?? null;
+  // net.tokens is absent on sepolia (only mainnet carries the STRK contract);
+  // fall back to the token prop App already resolves for the current network.
+  const strkToken = net.tokens?.STRK ?? token;
   const measuredDelayBlocks = Math.max(NOTE_MATURITY_BLOCKS, delay?.window ?? NOTE_MATURITY_BLOCKS);
   const isRehearsal = network === "sepolia" && delayMode === "rehearsal";
   // The wait the user actually gets: their chosen blocks, floored at the pool's
@@ -136,7 +139,7 @@ export default function ExecutePanel({
     }
     (async () => {
       try {
-        const v = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: net.tokens.STRK });
+        const v = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: strkToken });
         if (!cancelled) setVisibleStrk(v);
       } catch {
         if (!cancelled) setVisibleStrk(null);
@@ -145,7 +148,7 @@ export default function ExecutePanel({
     return () => {
       cancelled = true;
     };
-  }, [account, net.rpc, net.tokens.STRK]);
+  }, [account, net.rpc, strkToken]);
   const shieldedStrkBalance = useMemo(() => {
     if (!Array.isArray(balances)) return null;
     try {
@@ -855,7 +858,7 @@ export default function ExecutePanel({
     // pre-flight with the generic 156 and nothing is broadcast — refuse
     // early, plainly, with real numbers instead of padded ones.
     try {
-      const visible = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: net.tokens.STRK });
+      const visible = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: strkToken });
       // Same source as the Step-5 readout (4J-REV): 6 STRK fee leg + ~3.2 gas.
       const MIN_VISIBLE = visibleRequirement(net.observed?.feeAmountWei);
       if (visible != null && visible < MIN_VISIBLE) {

@@ -41,8 +41,17 @@ const VERDICTS = {
 
 const PRESETS = ["100", "1000", "5000", "50000"];
 
+const VALID_NETWORKS = ["mainnet", "sepolia"];
+
+// The README documents point-at-?network=sepolia as the rehearsal entry path;
+// honour it on load instead of always starting on mainnet.
+function initialNetwork() {
+  const fromUrl = new URLSearchParams(window.location.search).get("network");
+  return VALID_NETWORKS.includes(fromUrl) ? fromUrl : "mainnet";
+}
+
 export default function App() {
-  const [network, setNetwork] = useState("mainnet");
+  const [network, setNetwork] = useState(initialNetwork);
   const [state, setState] = useState({ status: "loading" });
   const [positionText, setPositionText] = useState("50000");
   const [feeModel, setFeeModel] = useState(DEFAULT_FEE_MODEL);
@@ -64,6 +73,15 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [network]);
+
+  // Keep the address bar in sync so ?network=… links stay shareable and a
+  // refresh lands on the same network the user was looking at.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("network") === network) return;
+    url.searchParams.set("network", network);
+    window.history.replaceState(null, "", url);
   }, [network]);
 
   const stats = useMemo(() => {
@@ -255,7 +273,9 @@ export default function App() {
                     <p className="err-body">Check your connection, Retry, or switch to Sepolia.</p>
                     <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
                       <button className="chip" onClick={() => window.location.reload()} style={{ flex: 1 }}>Retry</button>
-                      <button className="chip" style={{ flex: 1 }}>Switch to Sepolia</button>
+                      {network !== "sepolia" && (
+                        <button className="chip" style={{ flex: 1 }} onClick={() => setNetwork("sepolia")}>Switch to Sepolia</button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -479,7 +499,6 @@ export default function App() {
               type="text"
               inputMode="decimal"
               value={positionText}
-              autoFocus
               onChange={(e) => setPositionText(e.target.value)}
               aria-label="Position in STRK"
             />
@@ -575,13 +594,15 @@ export default function App() {
                             {analysis.rec.verdict === "position-too-small" && (
                               <p className="verdict-guidance" style={{ direction: "ltr", marginTop: 8, fontSize: 11 }}>
                                 Fees would eat this position. Minimum ~10 STRK recommended — or{' '}
-                                <button
-                                  className="chip"
-                                  style={{ marginLeft: 4, fontSize: 10 }}
-                                  onClick={() => window.location.replace("?network=sepolia")}
-                                >
-                                  Switch to Sepolia
-                                </button>
+                                {network !== "sepolia" && (
+                                  <button
+                                    className="chip"
+                                    style={{ marginLeft: 4, fontSize: 10 }}
+                                    onClick={() => setNetwork("sepolia")}
+                                  >
+                                    Switch to Sepolia
+                                  </button>
+                                )}
                               </p>
                             )}
                             <p className="status" style={{ marginTop: 12 }}>
