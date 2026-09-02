@@ -374,11 +374,21 @@ export default function ExecutePanel({
   const refreshBalances = useCallback(async () => {
     if (!account || !walletObj) return;
     const tokens = [token, vToken].filter(Boolean);
+    setBusy("balances");
     try {
       const b = await shieldedBalances(account, tokens);
       setBalances(b);
-    } catch {
+      say("Wallet shared your hidden balances.", "ok");
+    } catch (e) {
       setBalances(null);
+      say(
+        isUserRejection(e)
+          ? "Balance share was rejected in the wallet — the fee-reserve check needs it. Press 'share balances' again and approve."
+          : `Wallet did not share hidden balances: ${e.message}. Press 'share balances' to retry.`,
+        "err",
+      );
+    } finally {
+      setBusy(null);
     }
   }, [account, walletObj, token, vToken]);
 
@@ -1486,6 +1496,23 @@ export default function ExecutePanel({
                   <strong> — add visible STRK before entering the vault</strong>
                 )}
               </p>
+            )}
+
+            {account && balances == null && (
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  className="chip"
+                  onClick={() => refreshBalances()}
+                  disabled={busy === "balances"}
+                  title="Ask the wallet to share your hidden (shielded) balances. Argent shows a prompt — approve it to unlock the fee-reserve check."
+                >
+                  share balances
+                </button>
+                <span style={{ fontSize: 11, color: "var(--ghost)", marginLeft: 8 }}>
+                  no shielded balance shared yet — the fee-reserve gate needs it
+                </span>
+              </div>
             )}
 
             {ready && schedule?.length > 0 && (
