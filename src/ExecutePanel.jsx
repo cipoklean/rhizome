@@ -23,6 +23,7 @@ import {
   dryRun,
   ensureWalletChain,
   execute,
+  executeSelfPay,
   listWallets,
   pickLandedPoolTx,
   rawSimulateInvoke,
@@ -106,7 +107,11 @@ export default function ExecutePanel({
   const [reserveShieldedAt, setReserveShieldedAt] = useState(null);
   // Persistent (not transient) vault failure card — paymaster 156 etc.
   const [vaultMaturityCard, setVaultMaturityCard] = useState(null);
+  // Persistent (not transient) vault failure card — paymaster 156 etc.
   const [vaultErrorCard, setVaultErrorCard] = useState(null);
+  // 4L: self-pay toggle — broadcast the vault move WITHOUT the wallet's
+  // paymaster, paying gas from the visible balance. Default: paymaster.
+  const [selfPay, setSelfPay] = useState(false);
   const [deepSimResult, setDeepSimResult] = useState(null);
   const [deepSimBusy, setDeepSimBusy] = useState(false);
   // Recovery lane for submissions whose hash never reached us (wallet answered
@@ -880,7 +885,13 @@ export default function ExecutePanel({
     }
     try {
       await requireSelectedChain();
-      const { transaction_hash } = await execute(account, investActionsFor(schedule[i]));
+      // 4L: two broadcast paths for the same vault actions.
+      // - Paymaster (default): wallet relays via its PaymasterV2.
+      // - Self-pay: real proofs + classic wallet_addInvokeTransaction —
+      //   the user's visible STRK pays gas, no paymaster pre-flight.
+      const { transaction_hash } = selfPay
+        ? await executeSelfPay(account, investActionsFor(schedule[i]))
+        : await execute(account, investActionsFor(schedule[i]));
       patch(i, { stage: "invest-pending", investTx: transaction_hash });
       say(`Piece ${i + 1} vault move sent: ${transaction_hash}`, "ok");
       const provider = await connect(net.rpc);
@@ -906,6 +917,25 @@ export default function ExecutePanel({
         if (reconciled) {
           setVaultErrorCard(null);
           setDeepSimResult(null);
+        } else if (legs[i]?.investTx) {
+          // 4L: self-pay broadcasts, so failures now carry a real hash. The
+          // receipt's execution_error is the on-chain truth — print it
+          // verbatim instead of the wallet's wrapper text.
+          try {
+            const provider = await connect(net.rpc);
+            const receipt = await provider.getTransactionReceipt(legs[i].investTx);
+            const execErr = receipt?.execution_status === "REVERTED" ? receipt?.revert_reason ?? "(reverted with no reason string)" : null;
+            if (execErr) {
+              setVaultErrorCard({
+                piece: i + 1,
+                reason: execErr,
+                feePattern: false,
+                txHash: legs[i].investTx,
+              });
+              say(`Piece ${i + 1} vault move reverted on-chain — reason printed on the card.`, "err");
+              return;
+            }
+          } catch {}
         } else {
           patch(i, { stage: "vault_failed" });
           let reason = e?.message ?? String(e);
@@ -1267,6 +1297,25 @@ export default function ExecutePanel({
                   ))}
                 </select>
               </label>
+              <label
+                className="field"
+                title="The wallet's paymaster sponsors the vault move by default. When its pre-flight keeps rejecting the move (error 156 with an empty reason), self-pay broadcasts the same transaction yourself: gas comes from your visible STRK, no paymaster involved."
+              >
+                Sponsor my own gas (skip paymaster)
+                <input
+                  type="checkbox"
+                  checked={selfPay}
+                  onChange={(e) => setSelfPay(e.target.checked)}
+                  style={{ marginTop: 6 }}
+                />
+              </label>
+              {selfPay && (
+                <p className="status" style={{ marginTop: 6, maxWidth: 340 }}>
+                  Self-pay: needs ~3-4 visible STRK for gas. You have{" "}
+                  {visibleStrk != null ? `${(Number(visibleStrk) / 1e18).toFixed(2)}` : "?"}. The vault
+                  fee leg (6 STRK) still applies on top.
+                </p>
+              )}
               {delay && !isRehearsal && (
                 <p className="status" style={{ marginTop: 6, maxWidth: 320 }}>
                   Timing model suggests {measuredDelayBlocks.toLocaleString()} blocks for cover; you chose {waitBlocks}. Shorter waits mean thinner cover — your call.

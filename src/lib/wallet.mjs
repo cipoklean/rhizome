@@ -392,6 +392,47 @@ export function execute(account, actions, { timeoutMs = 120000 } = {}) {
   ]).finally(() => clearTimeout(timer));
 }
 
+// ── 4L: self-pay broadcast (bypass the wallet's paymaster) ─────────────────
+// The STRK20 relay path (wallet_strk20InvokeTransaction) runs the wallet's
+// PaymasterV2 pre-flight, which rejects some valid vault multicalls with an
+// opaque 156 and an EMPTY errorMessages array — nothing is broadcast, no tx
+// hash, no receipt. The classic path (wallet_addInvokeTransaction) skips the
+// paymaster entirely: the user's account pays gas from its VISIBLE balance.
+// Shape proven from the SDK runtime (index.mjs): both entry points live on
+// WalletAccountV6.
+//
+//   strk20PrepareInvoke(actions, simulate=false) -> { call, proof } with REAL
+//     proof (simulate mode returns empty proofs by design — useless here).
+//   executeWithProof(calls, proof) -> addInvokeTransaction3({ calls, proof })
+//     -> wallet_addInvokeTransaction: user-pays-gas broadcast.
+export async function executeSelfPay(account, actions, { timeoutMs = 120000 } = {}) {
+  const acts = assertValidStrk20Actions(actions);
+  let prepared;
+  let timer;
+  try {
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            Object.assign(
+              new Error("wallet did not answer in time — if you approved, use Check once it lands"),
+              { code: "EXECUTE_TIMEOUT" },
+            ),
+          ),
+        timeoutMs,
+      );
+    });
+    // Real proofs (simulate=false), then the classic user-pays broadcast.
+    prepared = await Promise.race([account.strk20PrepareInvoke(acts, false), timeout]);
+    const { call, proof } = prepared ?? {};
+    if (!call?.calldata?.length) throw new Error("wallet prepared an empty self-pay call");
+    const tx = await Promise.race([account.executeWithProof(call, proof), timeout]);
+    return tx; // { transaction_hash } — broadcast, user paid gas
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Wait for a transaction, but never forever.
  *

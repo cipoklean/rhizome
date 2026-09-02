@@ -8,6 +8,7 @@ import {
   canonicalFelt,
   ensureWalletChain,
   execute,
+  executeSelfPay,
   pickLandedPoolTx,
   resolveChainId,
   sameChain,
@@ -219,4 +220,35 @@ test("pickLandedPoolTx: wallet error + no matching activity -> null (failure car
     "SUCCEEDED outside the window never reconciles",
   );
   assert.equal(pickLandedPoolTx(null, 1200), null, "garbage scan -> null");
+});
+
+// ── 4L: self-pay broadcast (bypass the wallet's paymaster) ─────────────────
+test("executeSelfPay: prepares real proofs and broadcasts via executeWithProof", async () => {
+  const seen = { prepare: null, broadcast: null, simulate: null };
+  const account = {
+    strk20PrepareInvoke: async (actions, simulate) => {
+      seen.prepare = actions;
+      seen.simulate = simulate;
+      return { call: { contractAddress: "0xpool", entrypoint: "apply_actions", calldata: ["0x1"] }, proof: { notes: ["0xproof"] } };
+    },
+    executeWithProof: async (call, proof) => {
+      seen.broadcast = { call, proof };
+      return { transaction_hash: "0xabc" };
+    },
+  };
+  const tx = await executeSelfPay(account, [{ type: "deposit", token: "0x1", amount: "0x2" }]);
+  assert.equal(tx.transaction_hash, "0xabc");
+  assert.equal(seen.simulate, false, "must request REAL proofs (simulate=false)");
+  assert.equal(seen.broadcast.proof.notes[0], "0xproof", "proof must be forwarded to the broadcast");
+  assert.equal(seen.broadcast.call.entrypoint, "apply_actions");
+});
+
+test("executeSelfPay: empty prepared call is refused before broadcast", async () => {
+  const account = {
+    strk20PrepareInvoke: async () => ({ call: { calldata: [] }, proof: null }),
+    executeWithProof: async () => {
+      throw new Error("should not be reached");
+    },
+  };
+  await assert.rejects(executeSelfPay(account, [{ type: "deposit", token: "0x1", amount: "0x2" }]), /empty self-pay call/);
 });
