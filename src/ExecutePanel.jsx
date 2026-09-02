@@ -1589,12 +1589,24 @@ export default function ExecutePanel({
                               </button>
                             ) : state.stage === "vault_failed" ? (
                               <>
+                                {!state.investDryRun && (
+                                  <button
+                                    type="button"
+                                    className="chip"
+                                    onClick={() => (deployed ? dryRunInvest(i) : say("Vault helper is not deployed on this network; hiding still works.", "err"))}
+                                    disabled={busy != null}
+                                    title="The free vault test is session-only — a refresh clears it. Run it once, then press try again."
+                                  >
+                                    {busy === `dryrun-invest-${i}` ? "testing…" : "test vault"}
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   className="chip"
                                   onClick={() => investClick(i)}
                                   disabled={busy != null}
                                   title="A previous attempt never broadcast. Retry the vault move."
+                                  style={{ marginLeft: state.investDryRun ? 0 : 6 }}
                                 >
                                   {busy === `invest-${i}` ? "sending…" : "try again"}
                                 </button>
