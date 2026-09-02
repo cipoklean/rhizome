@@ -412,9 +412,14 @@ export function buildPrepareInvokeRequest(actions, simulate = true) {
 /**
  * Build and prove without submitting. The cheapest way to find a calldata-shape
  * mistake, and free — no fee, no transaction.
+ *
+ * 4N: in self-pay mode the free test also switches to the REAL-proof prepare
+ * (simulate=false) — the exact machinery the self-pay broadcast runs — so a
+ * passing test proves the same path the real move will take. Still no
+ * broadcast, no gas: prepare only.
  */
-export async function dryRun(account, actions) {
-  return account.strk20PrepareInvoke(assertValidStrk20Actions(actions), true);
+export async function dryRun(account, actions, { selfPay = false } = {}) {
+  return account.strk20PrepareInvoke(assertValidStrk20Actions(actions), !selfPay);
 }
 
 /**
@@ -426,7 +431,25 @@ export async function dryRun(account, actions) {
  * distinguishable error; the caller keeps the submission attempt checkable
  * rather than declaring the leg failed (the wallet may still relay it).
  */
-export function execute(account, actions, { timeoutMs = 120000 } = {}) {
+export function execute(account, actions, { timeoutMs = 120000, selfPay = false } = {}) {
+  // 4N: one router for every wallet send path. selfPay = the 4L bypass
+  // (real proofs + classic user-pays-gas broadcast); default = the wallet's
+  // STRK20 relay (its PaymasterV2 sponsors).
+  return selfPay
+    ? executeSelfPay(account, actions, { timeoutMs })
+    : executeRelayed(account, actions, { timeoutMs });
+}
+
+/**
+ * Submit through the wallet's STRK20 relay (paymaster path), but never wait forever.
+ *
+ * A wallet that accepted a transaction can still drop its response — the tab
+ * was backgrounded, the RPC bridge stalled. An unbounded await here strands
+ * `busy` and locks every other leg of the schedule. Time out and throw a
+ * distinguishable error; the caller keeps the submission attempt checkable
+ * rather than declaring the leg failed (the wallet may still relay it).
+ */
+export function executeRelayed(account, actions, { timeoutMs = 120000 } = {}) {
   let timer;
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(

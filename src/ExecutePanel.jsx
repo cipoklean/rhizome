@@ -23,7 +23,6 @@ import {
   dryRun,
   ensureWalletChain,
   execute,
-  executeSelfPay,
   declaredBoundsForMove,
   listWallets,
   pickLandedPoolTx,
@@ -463,7 +462,7 @@ export default function ExecutePanel({
     setBusy("dryrun-shield");
     try {
       await requireSelectedChain();
-      await dryRun(account, shieldActionsFor(schedule[0]));
+      await dryRun(account, shieldActionsFor(schedule[0]), { selfPay });
       setShieldDryRun(true);
       setDryRunPassTick((t) => t + 1);
       say("Free test passed: your wallet can hide this amount. Real move unlocked.", "ok");
@@ -600,7 +599,8 @@ export default function ExecutePanel({
   // nowhere else — buttons stay clickable so dead clicks are impossible.
   const gateBlocker = () => {
     if (!account) return "connect your wallet in Step 1";
-    if (!shieldDryRun) return "run the free test in Step 3 first";
+    // 4N: on-chain notes satisfy the free test — proof by existing balance.
+    if (!shieldDryRun && !(shieldedStrkBalance > 0n)) return "run the free test in Step 3 first";
     if (!paidSubmissionAllowed) return paidSubmissionReason ?? "paid moves are not available for this plan";
     if (!feePlan) return "the live fee is not known yet";
     if (!feePlan.balanceKnown)
@@ -641,7 +641,7 @@ export default function ExecutePanel({
       say(`Vault move is locked for piece ${i + 1}: ${blocker}.`, "err");
       return;
     }
-    if (!legs[i]?.investDryRun) {
+    if (!legs[i]?.investDryRun && !(shieldedStrkBalance > 0n)) {
       say(`Piece ${i + 1}: run "test vault" before entering.`, "err");
       return;
     }
@@ -713,13 +713,15 @@ export default function ExecutePanel({
   );
 
   async function shield(i) {
-    if (!account || !shieldDryRun || !paidGateOpen) return;
+    // 4N: existing on-chain notes satisfy the hide test — proof by balance.
+    if (!account || !paidGateOpen) return;
+    if (!shieldDryRun && !(shieldedStrkBalance > 0n)) return;
     setBusy(`shield-${i}`);
     patch(i, { stage: "shielding" });
     try {
       await requireSelectedChain();
       say(`Piece ${i + 1}: hiding ${strk(schedule[i].amount)} STRK, approve in wallet (2 prompts).`);
-      const { transaction_hash } = await execute(account, shieldActionsFor(schedule[i]));
+      const { transaction_hash } = await execute(account, shieldActionsFor(schedule[i]), { selfPay });
       // The wallet accepted the submission — from here on this leg is checkable,
       // never "failed", no matter what happens while waiting for the receipt.
       patch(i, { stage: "shield-pending", shieldTx: transaction_hash });
@@ -754,6 +756,27 @@ export default function ExecutePanel({
         const reconciled = await reconcileAfterWalletError(i, "hide");
         if (reconciled) {
           setGatewayError(null);
+        } else if (legs[i]?.shieldTx) {
+          // 4N: self-pay broadcasts, so a failed hide now carries a real hash.
+          // Read the receipt's revert reason verbatim — the on-chain truth.
+          try {
+            const provider = await connect(net.rpc);
+            const receipt = await provider.getTransactionReceipt(legs[i].shieldTx);
+            const execErr = receipt?.execution_status === "REVERTED"
+              ? receipt?.revert_reason ?? "(reverted with no reason string)"
+              : null;
+            if (execErr) {
+              setVaultErrorCard({
+                piece: i + 1,
+                reason: `Hide reverted on-chain: ${execErr}`,
+                feePattern: false,
+                txHash: legs[i].shieldTx,
+              });
+              say(`Piece ${i + 1} hide reverted on-chain — reason printed on the card.`, "err");
+              return;
+            }
+          } catch {}
+          patch(i, { stage: "failed" });
         } else {
           patch(i, { stage: "failed" });
           let reason = e?.message ?? String(e);
@@ -887,7 +910,7 @@ export default function ExecutePanel({
     setBusy(`dryrun-invest-${i}`);
     try {
       await requireSelectedChain();
-      const prepared = await dryRun(account, investActionsFor(schedule[i]));
+      const prepared = await dryRun(account, investActionsFor(schedule[i]), { selfPay });
       // 4M: keep the wallet-prepared call — the pre-flight bounds probe
       // replays exactly this calldata (simulate-mode shape; gas consumption
       // is identical to the real broadcast).
@@ -1020,13 +1043,10 @@ export default function ExecutePanel({
     }
     try {
       await requireSelectedChain();
-      // 4L: two broadcast paths for the same vault actions.
-      // - Paymaster (default): wallet relays via its PaymasterV2.
-      // - Self-pay: real proofs + classic wallet_addInvokeTransaction —
-      //   the user's visible STRK pays gas, no paymaster pre-flight.
-      const { transaction_hash } = selfPay
-        ? await executeSelfPay(account, investActionsFor(schedule[i]))
-        : await execute(account, investActionsFor(schedule[i]));
+      // 4N: every send path routes through the shared toggle — self-pay
+      // bypasses the wallet's PaymasterV2 (real proofs + classic broadcast,
+      // user's visible STRK pays gas); default = the wallet's STRK20 relay.
+      const { transaction_hash } = await execute(account, investActionsFor(schedule[i]), { selfPay });
       patch(i, { stage: "invest-pending", investTx: transaction_hash });
       say(`Piece ${i + 1} vault move sent: ${transaction_hash}`, "ok");
       const provider = await connect(net.rpc);
@@ -1340,7 +1360,15 @@ export default function ExecutePanel({
     const left = blocksLeft(i);
     if (left == null) return { label: "hidden", done: false };
     if (left > 0) return { label: `wait ${left} blocks (${formatDelay(left, secondsPerBlock)})`, done: false, waiting: true };
-    return { label: leg.investDryRun ? "ready for vault" : "test vault first", done: false, ready: true };
+    return {
+      label: leg.investDryRun
+        ? "ready for vault"
+        : shieldedStrkBalance > 0n
+          ? "free test skipped — notes on-chain"
+          : "test vault first",
+      done: false,
+      ready: true,
+    };
   };
 
   // wizard progress
@@ -1400,9 +1428,9 @@ export default function ExecutePanel({
               </label>
               <label
                 className="field"
-                title="The wallet's paymaster sponsors the vault move by default. When its pre-flight keeps rejecting the move (error 156 with an empty reason), self-pay broadcasts the same transaction yourself: gas comes from your visible STRK, no paymaster involved."
+                title="The wallet's paymaster sponsors every pool transaction by default. When its pre-flight keeps rejecting valid moves (error 156 with an empty reason), self-pay broadcasts the same transactions yourself — free test, hide, and vault move alike: gas comes from your visible STRK, no paymaster involved."
               >
-                Sponsor my own gas (skip paymaster)
+                Sponsor my own gas (skip paymaster — all moves)
                 <input
                   type="checkbox"
                   checked={selfPay}
@@ -1531,7 +1559,12 @@ export default function ExecutePanel({
                   </span>
                 )}
                 {scheduleSource === "sepolia-rehearsal" && <p className="status" style={{ marginTop: 8 }}>Practice amount {strk(schedule[0].amount)}, not a real recommendation.</p>}
-                {!shieldDryRun && <p className="status" style={{ marginTop: 8 }}>You must pass this before Hide unlocks.</p>}
+                {!shieldDryRun && shieldedStrkBalance > 0n && (
+                  <p className="status" style={{ marginTop: 8 }}>
+                    Hide test skipped — your {(Number(shieldedStrkBalance) / 1e18).toFixed(2)} shielded STRK on-chain already proves the flow. Hide unlocked.
+                  </p>
+                )}
+                {!shieldDryRun && !(shieldedStrkBalance > 0n) && <p className="status" style={{ marginTop: 8 }}>You must pass this before Hide unlocks.</p>}
               </>
             )}
           </div>
@@ -1709,6 +1742,24 @@ export default function ExecutePanel({
                               </>
                             ) : !status.ready ? (
                               <span style={{ color: "var(--faint)" }}>wait</span>
+                            ) : !state.investDryRun && shieldedStrkBalance > 0n ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="chip"
+                                  onClick={() => (state.stage === "invested" ? undefined : investClick(i))}
+                                  disabled={busy != null}
+                                  title="Free test skipped — you already have shielded STRK on-chain (proof by balance). Enter the vault directly."
+                                >
+                                  {busy === `invest-${i}` ? "sending…" : state.stage === "invested" ? "done ✓" : "enter vault"}
+                                </button>
+                                <span
+                                  style={{ display: "block", marginTop: 4, fontSize: 10, color: "var(--faint)" }}
+                                  title="The free test is only required when you have no shielded balance to prove the flow works. Your on-chain notes satisfy it."
+                                >
+                                  Free test skipped — you already have {(Number(shieldedStrkBalance) / 1e18).toFixed(2)} shielded STRK on-chain.
+                                </span>
+                              </>
                             ) : !state.investDryRun ? (
                               <button type="button" className="chip" onClick={() => (deployed ? dryRunInvest(i) : say("Vault helper is not deployed on this network; hiding still works.", "err"))} disabled={busy != null}>
                                 {busy === `dryrun-invest-${i}` ? "testing…" : "test vault"}
