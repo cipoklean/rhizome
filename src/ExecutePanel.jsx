@@ -24,6 +24,7 @@ import {
   ensureWalletChain,
   execute,
   executeSelfPay,
+  declaredBoundsForMove,
   listWallets,
   pickLandedPoolTx,
   rawSimulateInvoke,
@@ -99,6 +100,22 @@ function extractDetailedErrors(node, depth = 0, seen = new Set(), out = []) {
         const s = typeof item === "string" ? item : item?.message ?? item?.reason ?? JSON.stringify(item);
         if (s && typeof s === "string") out.push(s);
       }
+    } else if (v && typeof v === "object" && !Array.isArray(v)) {
+      // 4M: the {code: message} MAP shape — a catalog of per-error-code
+      // messages. Render the occurred code's entry as the reason; label the
+      // rest "catalog". JS iterates integer-like keys in ascending numeric
+      // order, so collect in two passes — occurred first, then catalog —
+      // the answer always leads.
+      const occurred = node.code ?? node.errorCode;
+      const hit = [];
+      const catalog = [];
+      for (const [mapKey, mapVal] of Object.entries(v)) {
+        const text = typeof mapVal === "string" ? mapVal : mapVal?.message ?? JSON.stringify(mapVal);
+        if (typeof text !== "string" || text.length === 0) continue;
+        const isOccurred = String(occurred) === mapKey || (occurred != null && mapKey.includes(String(occurred)));
+        (isOccurred ? hit : catalog).push(isOccurred ? text : `catalog[${mapKey}]: ${text}`);
+      }
+      out.push(...hit, ...catalog);
     } else if (typeof v === "string" && v.length > 0) {
       out.push(v);
     }
@@ -870,8 +887,11 @@ export default function ExecutePanel({
     setBusy(`dryrun-invest-${i}`);
     try {
       await requireSelectedChain();
-      await dryRun(account, investActionsFor(schedule[i]));
-      patch(i, { investDryRun: true });
+      const prepared = await dryRun(account, investActionsFor(schedule[i]));
+      // 4M: keep the wallet-prepared call — the pre-flight bounds probe
+      // replays exactly this calldata (simulate-mode shape; gas consumption
+      // is identical to the real broadcast).
+      patch(i, { investDryRun: true, investPreparedCall: prepared?.call ?? prepared ?? null });
       say(`Piece ${i + 1} vault test passed.`, "ok");
     } catch (e) {
       patch(i, { investDryRun: false });
@@ -940,31 +960,63 @@ export default function ExecutePanel({
       }
     }
     setBusy(`invest-${i}`);
-    // Pre-flight: the fee leg (6 STRK visible transfer to the fee router)
-    // plus gas (~3 STRK on mainnet, measured from real pool txs) is paid from
-    // the VISIBLE balance. Below the true minimum the paymaster refuses
-    // pre-flight with the generic 156 and nothing is broadcast — refuse
-    // early, plainly, with real numbers instead of padded ones.
+    // 4M pre-flight: EXACT declared bounds, measured not guessed. Runs the
+    // fee-charged simulation with wallet-typical bounds at the node's live
+    // prices — the same comparison the paymaster makes. Fails open on RPC
+    // down (falls back to the static 4J-REV estimate).
+    let declaredStrk = null;
+    let boundsPassed = null;
+    let boundsReason = null;
     try {
-      const visible = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: strkToken });
-      // Same source as the Step-5 readout (4J-REV): 6 STRK fee leg + ~3.2 gas.
-      const MIN_VISIBLE = visibleRequirement(net.observed?.feeAmountWei);
-      if (visible != null && visible < MIN_VISIBLE) {
-        const have = Number(visible) / 1e18;
-        setBusy(null);
-        setVaultErrorCard({
-          piece: i + 1,
-          reason: `Wallet has only ${have.toFixed(2)} visible STRK. A pool transaction needs ~9 visible STRK minimum: the 6 STRK fee leg plus ~3 STRK gas. Shielded funds cannot pay for the move that spends them. Add visible STRK to ${account.address.slice(0, 10)}… and retry.`,
-          feePattern: false,
-        });
-        say(
-          `Vault move blocked: only ${have.toFixed(2)} visible STRK — a pool transaction needs ~9 visible STRK (6 fee + ~3 gas).`,
-          "err",
-        );
-        return;
-      }
+      const preparedCall = legs[i]?.investPreparedCall;
+      const bounds = await declaredBoundsForMove({
+        rpcUrls: net.rpc,
+        senderAddress: account.address,
+        call:
+          preparedCall?.contractAddress && preparedCall?.calldata
+            ? preparedCall
+            : { contractAddress: net.strk20Pool, entrypoint: "apply_actions", calldata: [] },
+      });
+      declaredStrk = bounds.declaredStrk;
+      boundsPassed = bounds.passed;
+      boundsReason = bounds.reason;
     } catch {
-      // Balance read failed (RPC down) — never block the move on it.
+      declaredStrk = null; // RPC down — never block on it
+    }
+    if (declaredStrk == null) {
+      // Static fallback (4J-REV): 6 fee + 3.2 gas.
+      try {
+        const visible = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: strkToken });
+        const MIN_VISIBLE = visibleRequirement(net.observed?.feeAmountWei);
+        if (visible != null && visible < MIN_VISIBLE) {
+          const have = Number(visible) / 1e18;
+          const req = Number(MIN_VISIBLE) / 1e18;
+          setBusy(null);
+          setVaultErrorCard({
+            piece: i + 1,
+            reason: `This move needs about ${req.toFixed(1)} visible STRK (estimate); your wallet shows ${have.toFixed(2)}. Add ≥ ${(req - have + 5).toFixed(1)} STRK and retry. Shielded funds cannot pay for the move that spends them.`,
+            feePattern: false,
+          });
+          say(`Vault move blocked: ${have.toFixed(2)} visible STRK, needs ~${req.toFixed(1)}.`, "err");
+          return;
+        }
+      } catch {
+        // RPC fully down — fail open.
+      }
+    } else if (!boundsPassed && /exceed balance/i.test(String(boundsReason))) {
+      // The node itself compared the declaration against the live balance.
+      const have = await visibleBalance({ rpcUrls: net.rpc, owner: account.address, token: strkToken }).catch(() => null);
+      const haveStrk = have != null ? Number(have) / 1e18 : null;
+      setBusy(null);
+      setVaultErrorCard({
+        piece: i + 1,
+        reason: `This move declares resource bounds of ${declaredStrk.toFixed(2)} STRK; your wallet shows ${haveStrk != null ? haveStrk.toFixed(2) : "?"} visible. Add ≥ ${(declaredStrk - (haveStrk ?? 0) + 5).toFixed(1)} STRK and retry.`,
+        feePattern: false,
+      });
+      say(`Vault move blocked: declares ${declaredStrk.toFixed(2)} STRK of bounds, wallet has ${haveStrk != null ? haveStrk.toFixed(2) : "?"}.`, "err");
+      return;
+    } else if (boundsPassed) {
+      say(`Bounds check: this move declares ${declaredStrk.toFixed(2)} STRK of gas bounds — the node accepted it against your live balance.`, "info");
     }
     try {
       await requireSelectedChain();

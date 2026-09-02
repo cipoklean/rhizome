@@ -9,7 +9,7 @@
 //   walletV6.supportedWalletApi      capability detection
 //   strk20Balances / strk20PrepareInvoke / strk20InvokeTransaction
 
-import { CallData, WalletAccountV6, constants, walletV6 } from "starknet";
+import { CallData, WalletAccountV6, constants, hash, walletV6 } from "starknet";
 
 /** LendingOperation variants, in Cairo declaration order. */
 export const OPERATION = { Deposit: "0x0", Withdraw: "0x1" };
@@ -210,14 +210,24 @@ export async function visibleBalance({ rpcUrls, owner, token }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     })).json();
+  // Spec-correct FunctionCall (0.6+): { request: { contract_address,
+  // entry_point_selector, calldata }, block_id }. The camelCase
+  // entry_point variant cartridge used to tolerate was rejected starting
+  // 2026-09-02 ("missing field: request" / "entry_point_selector").
+  const selector = hash.getSelectorFromName("balance_of");
+  const params = {
+    request: { contract_address: token, entry_point_selector: selector, calldata: [owner] },
+    block_id: "latest",
+  };
   for (const url of rpcUrls ?? []) {
     try {
       const j = viaProxy
-        ? await send("/api/simulate", { rpcUrl: url, method: "starknet_call", params: { contract_address: token, entry_point: "balance_of", calldata: [owner], block_id: "latest" }, id: 1 })
-        : await send(url, { jsonrpc: "2.0", method: "starknet_call", params: { contract_address: token, entry_point: "balance_of", calldata: [owner], block_id: "latest" }, id: 1 });
+        ? await send("/api/simulate", { rpcUrl: url, method: "starknet_call", params, id: 1 })
+        : await send(url, { jsonrpc: "2.0", method: "starknet_call", params, id: 1 });
       if (j?.error) continue;
       const arr = j?.result;
-      if (Array.isArray(arr) && arr.length >= 1) return BigInt(arr[0]);
+      // balance_of returns a u256 as [low, high].
+      if (Array.isArray(arr) && arr.length >= 1) return BigInt(arr[0]) + (arr[1] ? BigInt(arr[1]) << 128n : 0n);
       if (typeof arr === "string") return BigInt(arr);
     } catch {
       continue;
@@ -644,6 +654,139 @@ export function pickLandedPoolTx(txs, currentBlock, window = 120) {
   // newest first
   landed.sort((a, b) => Number(b.block) - Number(a.block));
   return landed[0];
+}
+
+/**
+ * 4M: parse the node's live gas prices out of a deliberate low-price
+ * simulation refusal ("Max L2Gas price (1) is lower than the actual gas
+ * price: 33044742581"). Pure — unit-tested.
+ */
+export function parseGasPrices(refusalText) {
+  const txt = String(refusalText ?? "");
+  const grab = (re) => {
+    const m = txt.match(re);
+    return m ? BigInt(m[1]) : null;
+  };
+  const l1 = grab(/Max L1Gas price \(\d+\) is lower than the actual gas price: (\d+)/);
+  const l1d = grab(/Max L1DataGas price \(\d+\) is lower than the actual gas price: (\d+)/);
+  const l2 = grab(/Max L2Gas price \(\d+\) is lower than the actual gas price: (\d+)/);
+  return l1 || l1d || l2 ? { l1, l1d, l2 } : null;
+}
+
+/**
+ * 4M: the STRK value of a resource-bounds declaration (amount × price).
+ * Pure — unit-tested.
+ */
+export function boundsStrkWei(amount, pricePerUnit) {
+  try {
+    return BigInt(amount) * BigInt(pricePerUnit);
+  } catch {
+    return 0n;
+  }
+}
+
+/**
+ * 4M: what this move actually DECLARES, measured not guessed.
+ *
+ * Runs the fee-charged simulation with the wallet-typical declaration
+ * (mirroring the real mainnet hide tx: ~146M l2 units at 3× the node's live
+ * price floor, parsed from a deliberate low-price probe). Returns:
+ *   { passed, declaredStrk, shortBy, reason }
+ * - passed: the node accepted the declaration against the live balance —
+ *   declaredStrk is what the wallet will demand at send time.
+ * - shortBy > 0: the node refused because the declaration exceeds the
+ *   balance; declaredStrk is the requirement.
+ * RPC down → throws; the caller falls back to the static estimate.
+ */
+export async function declaredBoundsForMove({ rpcUrls, senderAddress, call } = {}) {
+  if (!call?.calldata?.length) throw new Error("no prepared call to probe bounds with — run the free test first");
+  const hexCalldata = (Array.isArray(call.calldata) ? call.calldata : [call.calldata]).map((v) =>
+    typeof v === "bigint" ? "0x" + v.toString(16) : String(v),
+  );
+  const compiled = CallData.compile({
+    orderCalls: [{ contractAddress: call.contractAddress, entrypoint: call.entrypoint, calldata: hexCalldata }],
+  }).map((v) => "0x" + BigInt(typeof v === "bigint" ? v : String(v)).toString(16));
+
+  let lastError = null;
+  for (const url of rpcUrls ?? []) {
+    try {
+      const block = (await rpcFetch(url, "starknet_blockNumber", []))?.result;
+      if (typeof block !== "number") throw new Error("blockNumber unavailable");
+      const nonce = (await rpcFetch(url, "starknet_getNonce", { contract_address: senderAddress, block_id: "latest" }))?.result;
+      if (typeof nonce !== "string" || !nonce.startsWith("0x")) throw new Error("nonce unavailable");
+
+      const makeTx = (l2Price, l1Price, l1dPrice) => ({
+        type: "INVOKE",
+        version: "0x100000000000000000000000000000003",
+        sender_address: senderAddress,
+        calldata: ["0x1", ...compiled],
+        signature: [],
+        nonce,
+        // Wallet-typical amounts, mirroring the real hide tx (0x8be103b l2 units).
+        resource_bounds: {
+          l2_gas: { max_amount: "0x8be103b", max_price_per_unit: l2Price },
+          l1_gas: { max_amount: "0x0", max_price_per_unit: l1Price },
+          l1_data_gas: { max_amount: "0x420", max_price_per_unit: l1dPrice },
+        },
+        tip: "0x0",
+        paymaster_data: [],
+        account_deployment_data: [],
+        nonce_data_availability_mode: "L1",
+        fee_data_availability_mode: "L1",
+      });
+
+      // Probe 1: price 1 — the refusal names the node's live prices.
+      const probe = await rpcFetch(url, "starknet_simulateTransactions", [
+        { block_number: block },
+        [makeTx("0x1", "0x1", "0x1")],
+        ["SKIP_VALIDATE"],
+      ]);
+      const prices = probe?.error
+        ? parseGasPrices(probe.error?.data?.execution_error ?? probe.error?.message ?? "")
+        : { l1: 115n * 10n ** 12n, l1d: 200n * 10n ** 9n, l2: 33n * 10n ** 9n }; // observed 2026-09-02 if probe passes
+      if (!prices) throw new Error("gas prices unavailable");
+
+      // Declare at 3× the node's floor — the wallet's own headroom style.
+      const px = (p) => "0x" + ((p ?? 1n) * 3n).toString(16);
+      const tx = makeTx(px(prices.l2), px(prices.l1), px(prices.l1d));
+      const declaredStrkWei =
+        boundsStrkWei(tx.resource_bounds.l2_gas.max_amount, tx.resource_bounds.l2_gas.max_price_per_unit) +
+        boundsStrkWei(tx.resource_bounds.l1_data_gas.max_amount, tx.resource_bounds.l1_data_gas.max_price_per_unit);
+
+      const j = await rpcFetch(url, "starknet_simulateTransactions", [
+        { block_number: block },
+        [tx],
+        ["SKIP_VALIDATE"],
+      ]);
+      if (j?.error) {
+        const msg = String(j.error?.data?.execution_error ?? j.error?.message ?? "");
+        // "Resources bounds ({...}) exceed balance (20130368570091437330)" —
+        // the node already compared declaration vs live balance.
+        if (/exceed balance/i.test(msg)) {
+          return {
+            passed: false,
+            declaredStrk: Number(declaredStrkWei) / 1e18,
+            shortBy: null, // node says the declaration exceeds; exact delta is the whole declaration
+            reason: msg,
+          };
+        }
+        return { passed: false, declaredStrk: Number(declaredStrkWei) / 1e18, shortBy: null, reason: msg };
+      }
+      const t = Array.isArray(j.result) ? j.result[0] : j.result;
+      const trace = t?.transaction_trace ?? {};
+      const reverted =
+        String(trace.execute_invocation_state ?? "").toUpperCase().includes("REVERT") || Boolean(trace.revert_reason);
+      return {
+        passed: !reverted,
+        declaredStrk: Number(declaredStrkWei) / 1e18,
+        shortBy: 0,
+        reason: reverted ? String(trace.revert_reason ?? "reverted in simulation") : "simulation passed",
+      };
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError ?? new Error("no reachable RPC for bounds probe");
 }
 
 export async function rawSimulateInvoke({

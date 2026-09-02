@@ -62,3 +62,19 @@ test("extractDetailedErrors: object causes still work (no regression)", () => {
   assert.ok(out.includes("nested object reason"));
   assert.ok(out.includes("deepest string"));
 });
+
+test("extractDetailedErrors: {code: message} MAP shape renders the occurred code, labels the rest catalog", () => {
+  const e = {
+    name: "ln",
+    code: 163,
+    errorMessages: {
+      "163": "the real reason for 163",
+      "156": "a paymaster refusal",
+      "4001": "user rejected",
+    },
+  };
+  const out = extractDetailedErrors(e);
+  assert.equal(out[0], "the real reason for 163", "occurred code's entry leads");
+  assert.ok(out.includes("catalog[156]: a paymaster refusal"), "rest labeled catalog");
+  assert.ok(out.includes("catalog[4001]: user rejected"));
+});
