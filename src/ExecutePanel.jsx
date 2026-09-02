@@ -403,7 +403,19 @@ export default function ExecutePanel({
       say("Free test passed: your wallet can hide this amount. Real move unlocked.", "ok");
     } catch (e) {
       setShieldDryRun(false);
-      say(`Free test failed: ${e.message}`, "err");
+      // 4H extraction on the dry-run path too: the wallet hides the real
+      // reason (errorMessages/context) behind UNKNOWN_ERROR 163.
+      const details = extractDetailedErrors(e);
+      if (typeof console !== "undefined") {
+        if (details.length > 0) console.log("Hide test paymaster errors:", details);
+        console.log("hide-test error shape:", serializeCause(e));
+      }
+      say(
+        details.length > 0
+          ? `Free test failed: ${details[0]}`
+          : `Free test failed: ${humanizeRevert(e?.message ?? String(e))}`,
+        "err",
+      );
     } finally {
       setBusy(null);
     }
@@ -814,7 +826,19 @@ export default function ExecutePanel({
       say(`Piece ${i + 1} vault test passed.`, "ok");
     } catch (e) {
       patch(i, { investDryRun: false });
-      say(`Piece ${i + 1} vault test failed: ${e.message}`, "err");
+      // 4H extraction on the dry-run path too: the wallet hides the real
+      // reason (errorMessages/context) behind UNKNOWN_ERROR 163.
+      const details = extractDetailedErrors(e);
+      if (typeof console !== "undefined") {
+        if (details.length > 0) console.log("Vault test paymaster errors:", details);
+        console.log("vault-test error shape:", serializeCause(e));
+      }
+      say(
+        details.length > 0
+          ? `Piece ${i + 1} vault test failed: ${details[0]}`
+          : `Piece ${i + 1} vault test failed: ${humanizeRevert(e?.message ?? String(e))}`,
+        "err",
+      );
     } finally {
       setBusy(null);
     }
