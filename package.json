@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test test/analysis.test.mjs test/execution.test.mjs test/timing.test.mjs test/wallet.test.mjs",
+    "test": "node --test test/analysis.test.mjs test/execution.test.mjs test/timing.test.mjs test/wallet.test.mjs test/diagnostics.test.mjs",
     "analyze": "node scripts/analyze.mjs",
     "snapshot": "node scripts/snapshot.mjs",
     "verify:facts": "node scripts/verify-facts.mjs",

@@ -69,6 +69,10 @@ function isUserRejection(e) {
 // deep-simulate) can use them — a helper defined in one catch was unreachable
 // from the others (ReferenceError masked the real wallet error).
 function serializeWalletError(err, depth = 0, seen = new Set()) {
+  // Wallets sometimes put the real reason in `cause` as a PLAIN STRING —
+  // not an Error. Returning the string itself (not "[depth limit]") is the
+  // whole point: that string IS the answer.
+  if (typeof err === "string") return err;
   if (!err || typeof err !== "object" || seen.has(err) || depth > 6) return "[depth limit]";
   seen.add(err);
   return {
@@ -76,10 +80,12 @@ function serializeWalletError(err, depth = 0, seen = new Set()) {
     message: err.message,
     code: err.code,
     data: err.data,
+    errorMessages: err.errorMessages, // the VALUE — ownPropertyNames proved the key exists; now we see what's in it
+    context: err.context,
     ownPropertyNames: Object.getOwnPropertyNames(err),
-    cause: err.cause ? serializeWalletError(err.cause, depth + 1, seen) : undefined,
-    originalError: err.originalError ? serializeWalletError(err.originalError, depth + 1, seen) : undefined,
-    error: err.error ? serializeWalletError(err.error, depth + 1, seen) : undefined,
+    cause: err.cause != null ? serializeWalletError(err.cause, depth + 1, seen) : undefined,
+    originalError: err.originalError != null ? serializeWalletError(err.originalError, depth + 1, seen) : undefined,
+    error: err.error != null ? serializeWalletError(err.error, depth + 1, seen) : undefined,
   };
 }
 
@@ -98,7 +104,12 @@ function extractDetailedErrors(node, depth = 0, seen = new Set(), out = []) {
     }
   }
   for (const key of ["cause", "originalError", "error", "context"]) {
-    extractDetailedErrors(node[key], depth + 1, seen, out);
+    const v = node[key];
+    // A wallet that puts the reason in `cause` as a PLAIN STRING (Argent does
+    // this — "PaymasterV2Error: Paymaster error 156 …") was skipped entirely
+    // by the object-only walk. String causes ARE the reason text: capture them.
+    if (typeof v === "string" && v.length > 0 && !out.includes(v)) out.push(v);
+    else extractDetailedErrors(v, depth + 1, seen, out);
   }
   return out;
 }
