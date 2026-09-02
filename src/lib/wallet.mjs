@@ -146,7 +146,51 @@ export async function ensureWalletChain(wallet, targetChainId, api = walletV6) {
 
 /** Shielded balances, read through the wallet — no viewing key in the app. */
 export async function shieldedBalances(account, tokens) {
-  return account.strk20Balances(tokens.map((token, i) => canonicalFelt(token, `balance token ${i}`)));
+  const canonical = tokens.map((token, i) => canonicalFelt(token, `balance token ${i}`));
+  // A wallet bridge that never answers (dead content script, method not
+  // implemented by this version) leaves the caller hanging forever — which
+  // reads as "nothing happens, no prompt". Race it with a visible timeout
+  // instead, and trace the round-trip so the console shows what was sent.
+  if (typeof console !== "undefined") {
+    console.log("strk20Balances request →", canonical.join(", "));
+  }
+  const BALANCE_TIMEOUT_MS = 25000;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          Object.assign(
+            new Error(
+              "the wallet never answered the balance request (25s). The extension may not be running — try: reopen the Argent tab/popup, or revoke Rhizome in Argent's connected-apps list and reconnect.",
+            ),
+            { code: "BALANCE_TIMEOUT" },
+          ),
+        ),
+      BALANCE_TIMEOUT_MS,
+    );
+  });
+  let raw;
+  try {
+    raw = await Promise.race([account.strk20Balances(canonical), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (typeof console !== "undefined") {
+    console.log("strk20Balances response:", JSON.stringify(raw, (k, v) => (typeof v === "bigint" ? v.toString() : v), 2));
+  }
+  // Wallets may auto-share without prompting and some wrap the array
+  // ({balances: [...]} / {result: [...]}) instead of returning it bare.
+  // Normalize every observed shape; surface the raw shape when unexpected
+  // so the failure is diagnosable instead of a silent null.
+  if (Array.isArray(raw)) return raw;
+  const wrapped =
+    raw && typeof raw === "object"
+      ? (Array.isArray(raw.balances) ? raw.balances : Array.isArray(raw.result) ? raw.result : null)
+      : null;
+  if (wrapped) return wrapped;
+  if (raw == null) return []; // wallet answered with nothing — treat as shared-but-empty
+  throw new Error(`wallet returned an unusable balances shape: ${Object.prototype.toString.call(raw)}`);
 }
 
 /**
