@@ -65,6 +65,44 @@ function isUserRejection(e) {
   return /reject|denied|user cancelled|cancelled by user|user abort/i.test(msg);
 }
 
+// 4B/4H diagnostics, hoisted to module scope so EVERY catch (invest, dry-run,
+// deep-simulate) can use them — a helper defined in one catch was unreachable
+// from the others (ReferenceError masked the real wallet error).
+function serializeWalletError(err, depth = 0, seen = new Set()) {
+  if (!err || typeof err !== "object" || seen.has(err) || depth > 6) return "[depth limit]";
+  seen.add(err);
+  return {
+    name: err.constructor?.name,
+    message: err.message,
+    code: err.code,
+    data: err.data,
+    ownPropertyNames: Object.getOwnPropertyNames(err),
+    cause: err.cause ? serializeWalletError(err.cause, depth + 1, seen) : undefined,
+    originalError: err.originalError ? serializeWalletError(err.originalError, depth + 1, seen) : undefined,
+    error: err.error ? serializeWalletError(err.error, depth + 1, seen) : undefined,
+  };
+}
+
+function extractDetailedErrors(node, depth = 0, seen = new Set(), out = []) {
+  if (!node || typeof node !== "object" || seen.has(node) || depth > 6) return out;
+  seen.add(node);
+  for (const key of ["errorMessages", "error_messages", "errors"]) {
+    const v = node[key];
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        const s = typeof item === "string" ? item : item?.message ?? item?.reason ?? JSON.stringify(item);
+        if (s && typeof s === "string") out.push(s);
+      }
+    } else if (typeof v === "string" && v.length > 0) {
+      out.push(v);
+    }
+  }
+  for (const key of ["cause", "originalError", "error", "context"]) {
+    extractDetailedErrors(node[key], depth + 1, seen, out);
+  }
+  return out;
+}
+
 export default function ExecutePanel({
   net,
   network,
@@ -408,7 +446,7 @@ export default function ExecutePanel({
       const details = extractDetailedErrors(e);
       if (typeof console !== "undefined") {
         if (details.length > 0) console.log("Hide test paymaster errors:", details);
-        console.log("hide-test error shape:", serializeCause(e));
+        console.log("hide-test error shape:", serializeWalletError(e));
       }
       say(
         details.length > 0
@@ -831,7 +869,7 @@ export default function ExecutePanel({
       const details = extractDetailedErrors(e);
       if (typeof console !== "undefined") {
         if (details.length > 0) console.log("Vault test paymaster errors:", details);
-        console.log("vault-test error shape:", serializeCause(e));
+        console.log("vault-test error shape:", serializeWalletError(e));
       }
       say(
         details.length > 0
@@ -1015,22 +1053,7 @@ export default function ExecutePanel({
           // Wallet SDKs (paymaster wrappers especially) hide the reason under
           // .cause or non-enumerable fields; serialize the whole chain.
           if (typeof console !== "undefined") {
-            const serializeCause = (err, depth = 0, seen = new Set()) => {
-              if (!err || typeof err !== "object" || seen.has(err) || depth > 6) return "[depth limit]";
-              seen.add(err);
-              const out = {
-                name: err.constructor?.name,
-                message: err.message,
-                code: err.code,
-                data: err.data,
-                ownPropertyNames: Object.getOwnPropertyNames(err),
-                cause: err.cause ? serializeCause(err.cause, depth + 1, seen) : undefined,
-                originalError: err.originalError ? serializeCause(err.originalError, depth + 1, seen) : undefined,
-                error: err.error ? serializeCause(err.error, depth + 1, seen) : undefined,
-              };
-              return out;
-            };
-            console.error("vault-fail error shape:", serializeCause(e));
+            console.error("vault-fail error shape:", serializeWalletError(e));
           }
         } catch {}
         // 4H: the paymaster hides its exact rejection reasons in non-standard
@@ -1039,25 +1062,6 @@ export default function ExecutePanel({
         // refused, not just the generic 156/163 wrapper.
         let paymasterErrors = [];
         try {
-          const extractDetailedErrors = (node, depth = 0, seen = new Set(), out = []) => {
-            if (!node || typeof node !== "object" || seen.has(node) || depth > 6) return out;
-            seen.add(node);
-            for (const key of ["errorMessages", "error_messages", "errors"]) {
-              const v = node[key];
-              if (Array.isArray(v)) {
-                for (const item of v) {
-                  const s = typeof item === "string" ? item : item?.message ?? item?.reason ?? JSON.stringify(item);
-                  if (s && typeof s === "string") out.push(s);
-                }
-              } else if (typeof v === "string" && v.length > 0) {
-                out.push(v);
-              }
-            }
-            for (const key of ["cause", "originalError", "error", "context"]) {
-              extractDetailedErrors(node[key], depth + 1, seen, out);
-            }
-            return out;
-          };
           paymasterErrors = extractDetailedErrors(e);
         } catch {}
         if (typeof console !== "undefined") {
