@@ -1252,9 +1252,28 @@ export default function ExecutePanel({
       try {
         prepared = await dryRun(account, investActionsFor(schedule[i]));
       } catch (e) {
+        // The wallet's STRK20 prove service is the SAME one the live vault
+        // move uses — when it fails with the wallet's catch-all (163
+        // UNKNOWN_ERROR, possibly with the error-catalog map), the
+        // simulation cannot run either. That is itself the diagnosis:
+        // the failure is in the wallet's prover, NOT on-chain.
+        const msg = String(e?.message ?? e);
+        const code = e?.code ?? e?.cause?.code;
+        const catalogued = e?.errorMessages && typeof e.errorMessages === "object";
+        if (code === 163 || /UNKNOWN_ERROR/i.test(msg) || catalogued) {
+          setDeepSimResult({
+            ok: false,
+            reason:
+              `The wallet's STRK20 proof service is failing (the same ${code ?? 163} error as the live attempt) — ` +
+              "Deep Simulate needs that same service to build the call, so it cannot run either.\n\n" +
+              "This confirms the failure is inside the wallet's prover, not on-chain: the call itself was already verified valid by the earlier simulations. " +
+              "Retry after the wallet's service recovers (restarting the browser, or waiting out a degraded relayer).",
+          });
+          return;
+        }
         setDeepSimResult({
           ok: false,
-          reason: `wallet refused to prepare the simulation: ${String(e?.message ?? e)}`,
+          reason: `wallet refused to prepare the simulation: ${msg}`,
         });
         return;
       }
@@ -1919,7 +1938,9 @@ export default function ExecutePanel({
                 {vaultErrorCard.reason}
               </p>
               <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
-                The wrapper hides the reason — run Deep Simulate to read the exact on-chain revert.
+                {/UNKNOWN_ERROR|code 163/i.test(vaultErrorCard.reason ?? "")
+                  ? "The wallet's catch-all error (163) hides the reason — and its STRK20 proof service failing is itself the likely cause. If Deep Simulate reports the same service failure, the failure is inside the wallet, not on-chain: restart the browser or retry later."
+                  : "The wrapper hides the reason — run Deep Simulate to read the exact on-chain revert."}
               </p>
             </>
           )}
