@@ -1629,9 +1629,9 @@ export default function ExecutePanel({
                   className="chip"
                   onClick={() => refreshBalances()}
                   disabled={busy === "balances"}
-                  title="Ask the wallet to share your hidden (shielded) balances. Argent shows a prompt — approve it to unlock the fee-reserve check."
+                  title="Ask the wallet to share your hidden (shielded) balances. Argent shows a prompt — approve it to unlock the fee-reserve check. Under load the answer can take up to a minute."
                 >
-                  share balances
+                  {busy === "balances" ? "waiting for wallet…" : "share balances"}
                 </button>
                 <span style={{ fontSize: 11, color: "var(--ghost)", marginLeft: 8 }}>
                   no shielded balance shared yet — the fee-reserve gate needs it

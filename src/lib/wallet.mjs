@@ -154,7 +154,10 @@ export async function shieldedBalances(account, tokens) {
   if (typeof console !== "undefined") {
     console.log("strk20Balances request →", canonical.join(", "));
   }
-  const BALANCE_TIMEOUT_MS = 25000;
+  const BALANCE_TIMEOUT_MS = 60000; // Argent's STRK20 service runs slow under load
+  // (observed 2026-09-02: prove ops failing with 163, reads 2-3x slower). A
+  // confirm that arrives after the window reads as "not shared" — which is a
+  // lie about a degraded wallet, not about the user's funds. Give it a minute.
   let timer;
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(
@@ -162,7 +165,7 @@ export async function shieldedBalances(account, tokens) {
         reject(
           Object.assign(
             new Error(
-              "the wallet never answered the balance request (25s). The extension may not be running — try: reopen the Argent tab/popup, or revoke Rhizome in Argent's connected-apps list and reconnect.",
+              "the wallet never answered the balance request (60s). The STRK20 service may be degraded — reopen the Argent tab/popup once, then press 'share balances' again; or revoke Rhizome in Argent's connected-apps list and reconnect.",
             ),
             { code: "BALANCE_TIMEOUT" },
           ),
@@ -189,8 +192,16 @@ export async function shieldedBalances(account, tokens) {
       ? (Array.isArray(raw.balances) ? raw.balances : Array.isArray(raw.result) ? raw.result : null)
       : null;
   if (wrapped) return wrapped;
-  if (raw == null) return []; // wallet answered with nothing — treat as shared-but-empty
-  throw new Error(`wallet returned an unusable balances shape: ${Object.prototype.toString.call(raw)}`);
+  // A wallet that returns null AFTER a confirmed share is not "you have zero
+  // notes" — the STRK20 spec says a granted request returns an array. Rendering
+  // null as 0.00 locks the gates with a lie about the user's funds. Fail
+  // loudly so the retry path is visible instead (observed 2026-09-02: Argent's
+  // degraded service confirmed a share, then answered null).
+  throw new Error(
+    raw == null
+      ? "the wallet confirmed but returned no balance data (its STRK20 service may be degraded). Press 'share balances' to retry, or reconnect the wallet."
+      : `wallet returned an unusable balances shape: ${Object.prototype.toString.call(raw)}`,
+  );
 }
 
 /**
