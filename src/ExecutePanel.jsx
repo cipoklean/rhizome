@@ -604,7 +604,10 @@ export default function ExecutePanel({
     if (!paidSubmissionAllowed) return paidSubmissionReason ?? "paid moves are not available for this plan";
     if (!feePlan) return "the live fee is not known yet";
     if (!feePlan.balanceKnown)
-      return "your wallet has not shared hidden balances, so the fee reserve cannot be verified. Reconnect in Step 1 and approve the balance prompt";
+      // The wallet revoked/lost the balance share (e.g. its storage was
+      // cleared). The 4G-proxy readout below shows what the app CAN see;
+      // re-share via the "share balances" chip in Step 2.
+      return "your wallet has not shared hidden balances, so the fee reserve cannot be verified. Press \"share balances\" in Step 2 and approve the prompt";
     if (feePlan.reserveShortfall > 0n)
       return `the hidden fee reserve is short by ${strk(feePlan.reserveShortfall)} STRK. Hide ${strk(feePlan.bootstrapDeposit)} STRK extra first (Step 2 explains why)`;
     return null;
@@ -1785,6 +1788,27 @@ export default function ExecutePanel({
                                 view tx ↗
                               </a>
                             )}
+                            {(() => {
+                              // Persistent gate reason for THIS row (not a
+                              // vanishing toast): the vault move is blocked
+                              // until the wallet shares balances again.
+                              const blocker = gateBlocker();
+                              const blockedHere =
+                                state.stage !== "invested" &&
+                                state.stage !== "invest-pending" &&
+                                blocker &&
+                                /share|fee reserve|free test|connect/i.test(blocker);
+                              if (!blockedHere) return null;
+                              return (
+                                <span
+                                  role="status"
+                                  style={{ display: "block", marginTop: 4, fontSize: 10, color: "var(--warn, #b8860b)", maxWidth: 260 }}
+                                  title={blocker}
+                                >
+                                  ⚠ locked: {blocker}
+                                </span>
+                              );
+                            })()}
                           </td>
                         </tr>
                       );
