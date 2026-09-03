@@ -19,7 +19,7 @@ import {
   fetchWithdrawals,
   getFeeAmount,
 } from "./pool.mjs";
-import { poolTransactionBlocks } from "./timing.mjs";
+import { poolTransactionBlocks, measureBlockTime } from "./timing.mjs";
 
 const CACHE_PREFIX = "rhizome:pool:v2:compact:";
 
@@ -166,12 +166,13 @@ export async function loadPoolState(network, cfg, { onStale } = {}) {
   }
 
   const fromBlock = base ? Math.max(0, base.block + 1) : 0;
-  const [block, fee, liveFeeHistory] = await Promise.all([
+  const [block, fee, liveFeeHistory, secondsPerBlock] = await Promise.all([
     provider.getBlockNumber(),
     getFeeAmount(provider, net.strk20Pool),
     fromBlock <= Number.MAX_SAFE_INTEGER
       ? fetchFeeHistory(provider, net.strk20Pool, { fromBlock }).catch(() => [])
       : Promise.resolve([]),
+    measureBlockTime(provider).catch(() => null),
   ]);
 
   let mergedFeeHistory = base ? [...(base.feeHistory ?? []), ...liveFeeHistory].sort((a, b) => a.blockNumber - b.blockNumber) : liveFeeHistory;
@@ -191,6 +192,7 @@ export async function loadPoolState(network, cfg, { onStale } = {}) {
       feeLegsCount: base?.feeLegsCount ?? 0,
       source: base?.source ?? "live",
       stale: false,
+      secondsPerBlock,
     };
     return live;
   }
@@ -232,6 +234,7 @@ export async function loadPoolState(network, cfg, { onStale } = {}) {
     feeLegsCount: (base?.feeLegsCount ?? 0) + tailClass.feeLegs.length,
     source: "live",
     stale: false,
+    secondsPerBlock,
     fetchedAt: Date.now(),
   };
 

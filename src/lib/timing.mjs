@@ -176,3 +176,14 @@ export function formatDelay(blocks, secondsPerBlock) {
   if (seconds < 172800) return `${(seconds / 3600).toFixed(1)} h`;
   return `${(seconds / 86400).toFixed(1)} days`;
 }
+
+/**
+ * Wait label with its time estimate when block time is known:
+ * "1,000 blocks (~29 min)". Without a measured block time the estimate is
+ * omitted rather than echoing the block count back ("10 blocks (~10 blocks)").
+ */
+export function formatWaitLabel(blocks, secondsPerBlock) {
+  const base = `${blocks.toLocaleString()} blocks`;
+  if (secondsPerBlock === null || secondsPerBlock === undefined) return base;
+  return `${base} (~${formatDelay(blocks, secondsPerBlock)})`;
+}
