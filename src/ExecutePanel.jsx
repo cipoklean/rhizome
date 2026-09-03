@@ -717,8 +717,21 @@ export default function ExecutePanel({
 
   async function shield(i) {
     // 4N: existing on-chain notes satisfy the hide test — proof by balance.
-    if (!account || !paidGateOpen) return;
-    if (!shieldDryRun && !(shieldedStrkBalance > 0n)) return;
+    // Never silently return: a click that does nothing is the 4I sin. The
+    // speaking gates (shieldClick -> gateBlocker) run BEFORE this handler, so
+    // reaching here with a gate closed means a guard they don't cover — say it.
+    if (!account) {
+      say("Connect your wallet in Step 1 first.", "err");
+      return;
+    }
+    if (!paidGateOpen) {
+      say(`Hide is locked: ${gateBlocker() ?? "the fee plan is not ready yet — reload the analysis"}.`, "err");
+      return;
+    }
+    if (!shieldDryRun && !(shieldedStrkBalance > 0n)) {
+      say('Hide is locked: run the free test in Step 3 first (you have no shielded STRK on-chain to satisfy it).', "err");
+      return;
+    }
     setBusy(`shield-${i}`);
     patch(i, { stage: "shielding" });
     try {
@@ -970,7 +983,23 @@ export default function ExecutePanel({
   }
 
   async function invest(i) {
-    if (!account || !legs[i]?.investDryRun || !paidGateOpen) return;
+    // 4N parity: on-chain shielded notes satisfy the free-test gate — the
+    // same relaxation investClick received. Without this, a user with
+    // existing notes sees an unlocked row ("free test skipped") whose click
+    // silently dies — the 4I dead-button sin in a new place.
+    // Every guard SPEAKS: a click that does nothing is never acceptable.
+    if (!account) {
+      say("Connect your wallet in Step 1 first.", "err");
+      return;
+    }
+    if (!paidGateOpen) {
+      say(`Vault move is locked: ${gateBlocker() ?? "the fee plan is not ready yet — reload the analysis"}.`, "err");
+      return;
+    }
+    if (!legs[i]?.investDryRun && !(shieldedStrkBalance > 0n)) {
+      say(`Piece ${i + 1}: run "test vault" first — it proves the vault call shape for free.`, "err");
+      return;
+    }
     const leg = legs[i];
     // The contract rejects spends of newly-shielded funds for ~10 blocks.
     // Surface that as a clear message instead of letting the wallet surface

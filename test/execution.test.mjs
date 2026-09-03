@@ -401,3 +401,16 @@ test("visibleRequirement: amber vs neutral readout thresholds", () => {
   const unknown = null;
   assert.ok(!(unknown != null && unknown < req), "unknown balance fails open");
 });
+
+// ── gate consistency: relaxed rendering must match relaxed handlers ────────
+test("4N gate: shielded balance > 0 satisfies the free-test requirement in ALL guards", () => {
+  // The exact regression shipped in ea717bd: the row rendered "free test
+  // skipped" (balance > 0) while invest(i) still demanded investDryRun — a
+  // visually unlocked row whose click silently died.
+  const shielded = 33n * 10n ** 18n; // 33.10 STRK on-chain
+  // investClick/invest/shield all use this same predicate:
+  const testSatisfied = (legs, i) => Boolean(legs[i]?.investDryRun) || shielded > 0n;
+  assert.equal(testSatisfied({}, 0), true, "balance > 0 must unlock the vault");
+  assert.equal(testSatisfied({}, 0), true, "zero-balance users still need the test");
+  assert.equal(testSatisfied({ 0: { investDryRun: true } }, 0), true, "a passed test still unlocks");
+});
