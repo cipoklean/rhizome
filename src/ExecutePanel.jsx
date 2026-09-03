@@ -26,7 +26,6 @@ import {
   declaredBoundsForMove,
   listWallets,
   pickLandedPoolTx,
-  rawSimulateInvoke,
   recentPoolTxs,
   shieldedBalances,
   visibleBalance,
@@ -182,8 +181,6 @@ export default function ExecutePanel({
   // 4L: self-pay toggle — broadcast the vault move WITHOUT the wallet's
   // paymaster, paying gas from the visible balance. Default: paymaster.
   const [selfPay, setSelfPay] = useState(false);
-  const [deepSimResult, setDeepSimResult] = useState(null);
-  const [deepSimBusy, setDeepSimBusy] = useState(false);
   // Recovery lane for submissions whose hash never reached us (wallet answered
   // too slowly): the user pastes the explorer/wallet hash, we link the leg.
   const [hashPrompt, setHashPrompt] = useState(null);
@@ -1230,7 +1227,7 @@ export default function ExecutePanel({
           if (failedTxHash) console.log("vault-fail tx hash:", failedTxHash);
           else console.log("vault-fail tx hash: none found in error chain");
         }
-        // ANY vault failure shows the persistent card + Deep Simulate. The
+        // ANY vault failure shows the persistent card. The
         // fee-maturity pattern keeps its specific copy; everything else gets
         // the generic wrapper copy with the code and message inline.
         const feePattern = /paymaster.*156|transaction_execution_error|insufficient_balance/i.test(String(reason));
@@ -1249,105 +1246,6 @@ export default function ExecutePanel({
     }
   }
 
-  // Deep Simulate: raw-RPC simulation of the exact vault call. Bypasses the
-  // SDK's account factory entirely — that factory is where the felt(undefined)
-  // crashes lived (getEstimateTip is not implemented on cartridge, plus its
-  // own invocation-shape handling). The raw path hand-builds the broadcasted
-  // INVOKE, so the only failures left are chain-side and carry real text.
-  async function deepSimulate(i) {
-    if (!account || !schedule?.length) return;
-    setDeepSimBusy(true);
-    setDeepSimResult(null);
-    try {
-      // Step 1: the wallet assembles the STRK20 call (free, simulate mode).
-      let prepared;
-      try {
-        prepared = await dryRun(account, investActionsFor(schedule[i]));
-      } catch (e) {
-        // The wallet's STRK20 prove service is the SAME one the live vault
-        // move uses — when it fails with the wallet's catch-all (163
-        // UNKNOWN_ERROR, possibly with the error-catalog map), the
-        // simulation cannot run either. That is itself the diagnosis:
-        // the failure is in the wallet's prover, NOT on-chain.
-        const msg = String(e?.message ?? e);
-        const code = e?.code ?? e?.cause?.code;
-        const catalogued = e?.errorMessages && typeof e.errorMessages === "object";
-        if (code === 163 || /UNKNOWN_ERROR/i.test(msg) || catalogued) {
-          setDeepSimResult({
-            ok: false,
-            reason:
-              `The wallet's STRK20 proof service is failing (the same ${code ?? 163} error as the live attempt) — ` +
-              "Deep Simulate needs that same service to build the call, so it cannot run either.\n\n" +
-              "This confirms the failure is inside the wallet's prover, not on-chain: the call itself was already verified valid by the earlier simulations. " +
-              "Retry after the wallet's service recovers (restarting the browser, or waiting out a degraded relayer).",
-          });
-          return;
-        }
-        setDeepSimResult({
-          ok: false,
-          reason: `wallet refused to prepare the simulation: ${msg}`,
-        });
-        return;
-      }
-      const call = prepared?.call ?? prepared;
-      // Step 1.5 — casing map: the wallet speaks SNIP-36 snake_case
-      // (contract_address, entry_point); normalize to a clean camelCase Call.
-      const normalizeCall = (c) => {
-        if (Array.isArray(c)) return c.map(normalizeCall);
-        if (!c || typeof c !== "object") return c;
-        return {
-          contractAddress: c.contractAddress ?? c.contract_address,
-          entrypoint: c.entrypoint ?? c.entry_point,
-          calldata: c.calldata,
-        };
-      };
-      const cleanCall = normalizeCall(call);
-      if (typeof console !== "undefined") {
-        console.log(
-          "Deep Simulate payload:",
-          JSON.stringify(cleanCall, (k, v) => (typeof v === "bigint" ? v.toString() : v), 2),
-        );
-      }
-      // Step 2: raw-RPC simulate. chargeFee:false skips only the SEQUENCER
-      // gas charge; the pool's internal 6-STRK fee flow still runs, so a
-      // young fee note still reverts here exactly like live.
-      try {
-        const r = await rawSimulateInvoke({
-          rpcUrls: net.rpc,
-          senderAddress: account.address,
-          call: cleanCall,
-          chargeFee: false,
-        });
-        // The wallet's simulate-mode call carries EMPTY PROOFS by design
-        // (proofs are generated only at real invoke time). If the pool
-        // rejects the proofs, that is a limitation of this diagnostic —
-        // not the live failure. Say so honestly.
-        if (!r.ok && /deserialize param|proof/i.test(r.reason)) {
-          setDeepSimResult({
-            ok: false,
-            reason:
-              `Simulation reached the pool but reverted at the proof check: ${r.reason}\n\n` +
-              "The free wallet preparation returns EMPTY proofs by design — real proofs are only generated at send time. " +
-              "This diagnostic cannot replay the live vault failure end-to-end; it verifies everything up to the proofs.",
-          });
-          return;
-        }
-        setDeepSimResult({
-          ok: r.ok,
-          reason: r.ok
-            ? "simulation passed — the call, fee flow and action shape are valid up to the (empty) proofs"
-            : r.reason,
-        });
-      } catch (e) {
-        // The raw simulate itself threw (RPC refused, no endpoint reachable).
-        // Print the raw error verbatim — honest failure.
-        const detail = e?.cause?.message ? `${e.message} (cause: ${e.cause.message})` : String(e?.message ?? e);
-        setDeepSimResult({ ok: false, reason: `simulation call failed: ${detail}` });
-      }
-    } finally {
-      setDeepSimBusy(false);
-    }
-  }
 
   async function checkInvest(i) {
     const tx = legs[i]?.investTx;
@@ -1952,7 +1850,7 @@ export default function ExecutePanel({
               </p>
               <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
                 Most common cause: a fee note younger than 10 blocks. Wait ~1 minute and retry. If it
-                persists, run Deep Simulate.
+                persists, restart the browser and try again.
               </p>
             </>
           ) : (
@@ -1964,9 +1862,9 @@ export default function ExecutePanel({
                 {vaultErrorCard.reason}
               </p>
               <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
-                {/UNKNOWN_ERROR|code 163/i.test(vaultErrorCard.reason ?? "")
-                  ? "The wallet's catch-all error (163) hides the reason — and its STRK20 proof service failing is itself the likely cause. If Deep Simulate reports the same service failure, the failure is inside the wallet, not on-chain: restart the browser or retry later."
-                  : "The wrapper hides the reason — run Deep Simulate to read the exact on-chain revert."}
+                The wallet reported the failure; the exact revert text isn't exposed by the
+                wallet API. If it keeps failing, restart the browser and retry — the wallet's
+                STRK20 proof service failing is the most common cause.
               </p>
             </>
           )}
@@ -1993,14 +1891,6 @@ export default function ExecutePanel({
               </ul>
             </div>
           )}
-          <button
-            type="button"
-            className="chip"
-            onClick={() => deepSimulate(vaultErrorCard.piece - 1)}
-            disabled={deepSimBusy}
-          >
-            {deepSimBusy ? "simulating…" : "Deep Simulate"}
-          </button>
           {vaultErrorCard.txHash && (
             <button
               type="button"
@@ -2029,23 +1919,6 @@ export default function ExecutePanel({
             >
               view tx ↗
             </a>
-          )}
-          {deepSimResult && (
-            <p
-              className="deep-sim-result"
-              style={{
-                marginTop: 10,
-                marginBottom: 0,
-                fontFamily: "var(--mono)",
-                fontSize: 12,
-                whiteSpace: "pre-wrap",
-                color: deepSimResult.ok ? "var(--ok, #2e9e5b)" : "var(--error)",
-                direction: "ltr",
-              }}
-            >
-              {deepSimResult.ok ? "✓ " : "✗ "}
-              {deepSimResult.reason}
-            </p>
           )}
         </div>
       )}

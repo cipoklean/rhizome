@@ -249,7 +249,7 @@ Engineering notes only — items intentionally not shipped in the hackathon buil
   can draw the fee; the free dry run simulates without charging the real fee
   and cannot catch this. The app now guards it pre-flight (blocks the submit
   with a live countdown) and maps paymaster error 156 to an honest
-  explanation with a Deep Simulate escape hatch.
+  explanation with the plain-English failure card.
 - **Visible-STRK funding (live incident, 2026-09)** — pool transactions are
   funded from the VISIBLE balance, never the shielded one: each hide burns
   ~3.2 STRK gas (observed 3.04–3.25), and the vault move additionally draws a
