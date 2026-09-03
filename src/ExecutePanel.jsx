@@ -41,6 +41,12 @@ function humanizeRevert(raw) {
   if (/paymaster.*156|transaction_execution_error/i.test(s)) {
     return "The vault move was rejected by the pool. If your note was hidden fewer than 10 blocks ago, wait for it to mature, then press Check and retry. If the wait already passed, run the free vault test again before entering.";
   }
+  // Argent's session layer rejects STRK20 ops pre-prompt when the dapp lacks
+  // STRK20 authorization in this wallet instance (fresh import, or revoked).
+  // Not in the wallet-spec error enum — plain Error, no code.
+  if (/preauthoriz/i.test(s)) {
+    return "The wallet has not authorized Rhizome for private-balance (STRK20) operations yet. In the wallet: Settings → connected dapps → revoke Rhizome, then reconnect in the app and approve EVERY prompt (including the private-balance one). Importing a seed does not carry dapp authorizations over.";
+  }
   if (/reserve|insufficient|balance|short|fee|collect_fee|enough strk|not enough/i.test(s)) {
     return "Hidden reserve too low to pay the pool fee — add more hidden STRK (Step 2 shows the exact amount), then retry.";
   }
