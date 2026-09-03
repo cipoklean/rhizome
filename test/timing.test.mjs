@@ -124,3 +124,15 @@ test("wait labels carry a time estimate only when block time is known", () => {
   assert.equal(formatWaitLabel(10, null), "10 blocks");
   assert.equal(formatWaitLabel(1000, null), "1,000 blocks");
 });
+
+// ── post-hide render crash regression: BigInt block counts ────────────────
+test("formatDelay: survives BigInt block counts (Cannot mix BigInt fix)", () => {
+  // The exact value that crashed the legs table after a successful hide:
+  // maturityBlock - currentBlock arrives as a BigInt (both are BigInts).
+  const bigLeft = 7n;
+  assert.equal(formatDelay(bigLeft, 2.4), "17s");
+  assert.equal(formatDelay(0n, 2.4), "0s");
+  assert.equal(formatDelay(10n ** 9n, 2.4), "27777.8 days");
+  // Numbers still work unchanged.
+  assert.equal(formatDelay(7, 2.4), "17s");
+});

@@ -170,7 +170,12 @@ export async function measureBlockTime(provider, { sampleBlocks = 10000 } = {}) 
 /** Human-readable delay, given a measured block time. */
 export function formatDelay(blocks, secondsPerBlock) {
   if (secondsPerBlock === null || secondsPerBlock === undefined) return `${blocks} blocks`;
-  const seconds = blocks * secondsPerBlock;
+  // Guard the class, not just the site: block counts arrive from BigInt math
+  // upstream (maturityBlock - currentBlock). Mixing a BigInt with the Number
+  // secondsPerBlock below throws "Cannot mix BigInt and other types" and
+  // crashes the whole render tree. Coerce once, here, forever.
+  const n = Number(blocks);
+  const seconds = n * secondsPerBlock;
   if (seconds < 90) return `${Math.round(seconds)}s`;
   if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
   if (seconds < 172800) return `${(seconds / 3600).toFixed(1)} h`;

@@ -1400,7 +1400,11 @@ export default function ExecutePanel({
     if (!leg?.shieldedAt || block == null) return null;
     const maturityBlock = BigInt(leg.shieldedAt) + BigInt(delayBlocks);
     if (BigInt(block) >= maturityBlock) return 0;
-    return maturityBlock - BigInt(block);
+    // ALWAYS a Number — render math (formatDelay multiplies by secondsPerBlock,
+    // a Number) must never receive a BigInt. A BigInt here crashed the whole
+    // legs table right after a successful hide (Cannot mix BigInt and other
+    // types) — the exact bug this guards.
+    return Number(maturityBlock - BigInt(block));
   };
 
   const legStatus = (i) => {
