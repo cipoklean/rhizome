@@ -150,10 +150,7 @@ export async function shieldedBalances(account, tokens) {
   // A wallet bridge that never answers (dead content script, method not
   // implemented by this version) leaves the caller hanging forever — which
   // reads as "nothing happens, no prompt". Race it with a visible timeout
-  // instead, and trace the round-trip so the console shows what was sent.
-  if (typeof console !== "undefined") {
-    console.log("strk20Balances request →", canonical.join(", "));
-  }
+  // instead so a silent wallet failure surfaces as a retryable error.
   const BALANCE_TIMEOUT_MS = 60000; // Argent's STRK20 service runs slow under load
   // (observed 2026-09-02: prove ops failing with 163, reads 2-3x slower). A
   // confirm that arrives after the window reads as "not shared" — which is a
@@ -178,9 +175,6 @@ export async function shieldedBalances(account, tokens) {
     raw = await Promise.race([account.strk20Balances(canonical), timeout]);
   } finally {
     clearTimeout(timer);
-  }
-  if (typeof console !== "undefined") {
-    console.log("strk20Balances response:", JSON.stringify(raw, (k, v) => (typeof v === "bigint" ? v.toString() : v), 2));
   }
   // Wallets may auto-share without prompting and some wrap the array
   // ({balances: [...]} / {result: [...]}) instead of returning it bare.
@@ -423,18 +417,13 @@ export function buildPrepareInvokeRequest(actions, simulate = true) {
 /**
  * Build and prove without submitting. The cheapest way to find a calldata-shape
  * mistake, and free — no fee, no transaction.
- *
- * 4N: in self-pay mode the free test also switches to the REAL-proof prepare
- * (simulate=false) — the exact machinery the self-pay broadcast runs — so a
- * passing test proves the same path the real move will take. Still no
- * broadcast, no gas: prepare only.
  */
-export async function dryRun(account, actions, { selfPay = false } = {}) {
-  return account.strk20PrepareInvoke(assertValidStrk20Actions(actions), !selfPay);
+export async function dryRun(account, actions) {
+  return account.strk20PrepareInvoke(assertValidStrk20Actions(actions), true);
 }
 
 /**
- * Submit through the wallet, but never wait forever.
+ * Submit through the wallet's STRK20 relay, but never wait forever.
  *
  * A wallet that accepted a transaction can still drop its response — the tab
  * was backgrounded, the RPC bridge stalled. An unbounded await here strands
@@ -442,13 +431,8 @@ export async function dryRun(account, actions, { selfPay = false } = {}) {
  * distinguishable error; the caller keeps the submission attempt checkable
  * rather than declaring the leg failed (the wallet may still relay it).
  */
-export function execute(account, actions, { timeoutMs = 120000, selfPay = false } = {}) {
-  // 4N: one router for every wallet send path. selfPay = the 4L bypass
-  // (real proofs + classic user-pays-gas broadcast); default = the wallet's
-  // STRK20 relay (its PaymasterV2 sponsors).
-  return selfPay
-    ? executeSelfPay(account, actions, { timeoutMs })
-    : executeRelayed(account, actions, { timeoutMs });
+export function execute(account, actions, { timeoutMs = 120000 } = {}) {
+  return executeRelayed(account, actions, { timeoutMs });
 }
 
 /**
@@ -478,47 +462,6 @@ export function executeRelayed(account, actions, { timeoutMs = 120000 } = {}) {
     account.strk20InvokeTransaction(assertValidStrk20Actions(actions)),
     timeout,
   ]).finally(() => clearTimeout(timer));
-}
-
-// ── 4L: self-pay broadcast (bypass the wallet's paymaster) ─────────────────
-// The STRK20 relay path (wallet_strk20InvokeTransaction) runs the wallet's
-// PaymasterV2 pre-flight, which rejects some valid vault multicalls with an
-// opaque 156 and an EMPTY errorMessages array — nothing is broadcast, no tx
-// hash, no receipt. The classic path (wallet_addInvokeTransaction) skips the
-// paymaster entirely: the user's account pays gas from its VISIBLE balance.
-// Shape proven from the SDK runtime (index.mjs): both entry points live on
-// WalletAccountV6.
-//
-//   strk20PrepareInvoke(actions, simulate=false) -> { call, proof } with REAL
-//     proof (simulate mode returns empty proofs by design — useless here).
-//   executeWithProof(calls, proof) -> addInvokeTransaction3({ calls, proof })
-//     -> wallet_addInvokeTransaction: user-pays-gas broadcast.
-export async function executeSelfPay(account, actions, { timeoutMs = 120000 } = {}) {
-  const acts = assertValidStrk20Actions(actions);
-  let prepared;
-  let timer;
-  try {
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(
-        () =>
-          reject(
-            Object.assign(
-              new Error("wallet did not answer in time — if you approved, use Check once it lands"),
-              { code: "EXECUTE_TIMEOUT" },
-            ),
-          ),
-        timeoutMs,
-      );
-    });
-    // Real proofs (simulate=false), then the classic user-pays broadcast.
-    prepared = await Promise.race([account.strk20PrepareInvoke(acts, false), timeout]);
-    const { call, proof } = prepared ?? {};
-    if (!call?.calldata?.length) throw new Error("wallet prepared an empty self-pay call");
-    const tx = await Promise.race([account.executeWithProof(call, proof), timeout]);
-    return tx; // { transaction_hash } — broadcast, user paid gas
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /**

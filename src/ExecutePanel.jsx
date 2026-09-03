@@ -70,30 +70,10 @@ function isUserRejection(e) {
   return /reject|denied|user cancelled|cancelled by user|user abort/i.test(msg);
 }
 
-// 4B/4H diagnostics, hoisted to module scope so EVERY catch (invest, dry-run,
-// deep-simulate) can use them — a helper defined in one catch was unreachable
-// from the others (ReferenceError masked the real wallet error).
-function serializeWalletError(err, depth = 0, seen = new Set()) {
-  // Wallets sometimes put the real reason in `cause` as a PLAIN STRING —
-  // not an Error. Returning the string itself (not "[depth limit]") is the
-  // whole point: that string IS the answer.
-  if (typeof err === "string") return err;
-  if (!err || typeof err !== "object" || seen.has(err) || depth > 6) return "[depth limit]";
-  seen.add(err);
-  return {
-    name: err.constructor?.name,
-    message: err.message,
-    code: err.code,
-    data: err.data,
-    errorMessages: err.errorMessages, // the VALUE — ownPropertyNames proved the key exists; now we see what's in it
-    context: err.context,
-    ownPropertyNames: Object.getOwnPropertyNames(err),
-    cause: err.cause != null ? serializeWalletError(err.cause, depth + 1, seen) : undefined,
-    originalError: err.originalError != null ? serializeWalletError(err.originalError, depth + 1, seen) : undefined,
-    error: err.error != null ? serializeWalletError(err.error, depth + 1, seen) : undefined,
-  };
-}
-
+// Wallet-error extraction, module scope so every catch can use it. Wallets put
+// the real reason in non-standard fields: `errorMessages` (array or {code:
+// message} map), `context`, and plain-string `cause` — none of which the
+// standard Error surface exposes.
 function extractDetailedErrors(node, depth = 0, seen = new Set(), out = []) {
   if (!node || typeof node !== "object" || seen.has(node) || depth > 6) return out;
   seen.add(node);
@@ -174,13 +154,10 @@ export default function ExecutePanel({
   // router draws the vault fee from the newest shielded STRK, so this bounds
   // the fee note's age. Null = hidden outside the app / before tracking.
   const [reserveShieldedAt, setReserveShieldedAt] = useState(null);
-  // Persistent (not transient) vault failure card — paymaster 156 etc.
+  // Persistent (not transient) vault-maturity notice.
   const [vaultMaturityCard, setVaultMaturityCard] = useState(null);
-  // Persistent (not transient) vault failure card — paymaster 156 etc.
+  // Persistent (not transient) vault failure card — wallet-side refusals etc.
   const [vaultErrorCard, setVaultErrorCard] = useState(null);
-  // 4L: self-pay toggle — broadcast the vault move WITHOUT the wallet's
-  // paymaster, paying gas from the visible balance. Default: paymaster.
-  const [selfPay, setSelfPay] = useState(false);
   // Recovery lane for submissions whose hash never reached us (wallet answered
   // too slowly): the user pastes the explorer/wallet hash, we link the leg.
   const [hashPrompt, setHashPrompt] = useState(null);
@@ -471,19 +448,15 @@ export default function ExecutePanel({
     setBusy("dryrun-shield");
     try {
       await requireSelectedChain();
-      await dryRun(account, shieldActionsFor(schedule[0]), { selfPay });
+      await dryRun(account, shieldActionsFor(schedule[0]));
       setShieldDryRun(true);
       setDryRunPassTick((t) => t + 1);
       say("Free test passed: your wallet can hide this amount. Real move unlocked.", "ok");
     } catch (e) {
       setShieldDryRun(false);
-      // 4H extraction on the dry-run path too: the wallet hides the real
-      // reason (errorMessages/context) behind UNKNOWN_ERROR 163.
+      // The wallet hides the real reason (errorMessages/context) behind
+      // UNKNOWN_ERROR 163 — extract it for the user-facing message.
       const details = extractDetailedErrors(e);
-      if (typeof console !== "undefined") {
-        if (details.length > 0) console.log("Hide test paymaster errors:", details);
-        console.log("hide-test error shape:", serializeWalletError(e));
-      }
       say(
         details.length > 0
           ? `Free test failed: ${details[0]}`
@@ -746,7 +719,7 @@ export default function ExecutePanel({
     try {
       await requireSelectedChain();
       say(`Piece ${i + 1}: hiding ${strk(schedule[i].amount)} STRK, approve in wallet (2 prompts).`);
-      const { transaction_hash } = await execute(account, shieldActionsFor(schedule[i]), { selfPay });
+      const { transaction_hash } = await execute(account, shieldActionsFor(schedule[i]));
       // The wallet accepted the submission — from here on this leg is checkable,
       // never "failed", no matter what happens while waiting for the receipt.
       patch(i, { stage: "shield-pending", shieldTx: transaction_hash });
@@ -843,16 +816,6 @@ export default function ExecutePanel({
           if (reason === e?.message && typeof e?.code === "number") {
             reason = `${e.constructor?.name || "Error"} code ${e.code}: ${reason}`;
           }
-          // Debug dump so the next failure reveals the full error shape.
-          if (typeof console !== "undefined") {
-            console.error("vault-fail error shape:", {
-              name: e?.constructor?.name,
-              message: e?.message,
-              code: e?.code,
-              data: e?.data,
-              causePresent: typeof e?.cause === "object" && e?.cause !== null,
-            });
-          }
         } catch {}
           say(`Piece ${i + 1} hide failed: ${humanizeRevert(reason)}`, "err");
         }
@@ -935,7 +898,7 @@ export default function ExecutePanel({
     setBusy(`dryrun-invest-${i}`);
     try {
       await requireSelectedChain();
-      const prepared = await dryRun(account, investActionsFor(schedule[i]), { selfPay });
+      const prepared = await dryRun(account, investActionsFor(schedule[i]));
       // 4M: keep the wallet-prepared call — the pre-flight bounds probe
       // replays exactly this calldata (simulate-mode shape; gas consumption
       // is identical to the real broadcast).
@@ -943,13 +906,9 @@ export default function ExecutePanel({
       say(`Piece ${i + 1} vault test passed.`, "ok");
     } catch (e) {
       patch(i, { investDryRun: false });
-      // 4H extraction on the dry-run path too: the wallet hides the real
-      // reason (errorMessages/context) behind UNKNOWN_ERROR 163.
+      // The wallet hides the real reason (errorMessages/context) behind
+      // UNKNOWN_ERROR 163 — extract it for the user-facing message.
       const details = extractDetailedErrors(e);
-      if (typeof console !== "undefined") {
-        if (details.length > 0) console.log("Vault test paymaster errors:", details);
-        console.log("vault-test error shape:", serializeWalletError(e));
-      }
       say(
         details.length > 0
           ? `Piece ${i + 1} vault test failed: ${details[0]}`
@@ -1084,10 +1043,10 @@ export default function ExecutePanel({
     }
     try {
       await requireSelectedChain();
-      // 4N: every send path routes through the shared toggle — self-pay
-      // bypasses the wallet's PaymasterV2 (real proofs + classic broadcast,
-      // user's visible STRK pays gas); default = the wallet's STRK20 relay.
-      const { transaction_hash } = await execute(account, investActionsFor(schedule[i]), { selfPay });
+      // All pool transactions go through the wallet's STRK20 relay (its
+      // paymaster funds and submits proof-carrying invokes; Argent requires
+      // this endpoint for STRK20 proof submissions).
+      const { transaction_hash } = await execute(account, investActionsFor(schedule[i]));
       patch(i, { stage: "invest-pending", investTx: transaction_hash });
       say(`Piece ${i + 1} vault move sent: ${transaction_hash}`, "ok");
       const provider = await connect(net.rpc);
@@ -1173,34 +1132,20 @@ export default function ExecutePanel({
           if (reason === e?.message && typeof e?.code === "number") {
             reason = `${e.constructor?.name || "Error"} code ${e.code}: ${reason}`;
           }
-          // Debug dump so the next failure reveals the full error shape.
-          // Wallet SDKs (paymaster wrappers especially) hide the reason under
-          // .cause or non-enumerable fields; serialize the whole chain.
-          if (typeof console !== "undefined") {
-            console.error("vault-fail error shape:", serializeWalletError(e));
-          }
         } catch {}
-        // 4H: the paymaster hides its exact rejection reasons in non-standard
-        // array/object fields (errorMessages, context) that the serializer
-        // above never reads. Extract them so the user sees WHY the paymaster
-        // refused, not just the generic 156/163 wrapper.
+        // The paymaster hides its exact rejection reasons in non-standard
+        // array/object fields (errorMessages, context). Extract them so the
+        // user sees WHY it refused, not just the generic wrapper.
         let paymasterErrors = [];
         try {
-          paymasterErrors = extractDetailedErrors(e);
+          // Keep only the occurred reason — the wallet's code catalog (one
+          // boilerplate line per possible error code) is noise for users.
+          const all = extractDetailedErrors(e);
+          paymasterErrors = all.filter((s) => !/^\s*catalog\[/.test(s)).slice(0, 1);
         } catch {}
-        if (typeof console !== "undefined") {
-          if (paymasterErrors.length > 0) {
-            console.log("Paymaster detailed errors:", paymasterErrors);
-          } else {
-            // 4H fallback: no errorMessages anywhere — dump context + cause
-            // raw; the paymaster may have nested the reasons there.
-            console.log("Paymaster detailed errors: none — full context:", e?.context, "| cause:", e?.cause);
-          }
-        }
-        // 4F: the on-chain receipt of the failed invoke is the remaining
-        // truth. Wallets often return the hash even when they report an
-        // error — walk the same cause chain and capture any tx hash so the
-        // receipt can be pulled and the REAL revert read.
+        // Wallets often return the hash even when they report an error —
+        // walk the cause chain and capture any tx hash so the receipt can be
+        // pulled and the real revert read.
         const TX_HASH_PATTERN = /^0x[0-9a-f]{40,80}$/i;
         const findTxHash = (node, depth = 0, seen = new Set()) => {
           if (!node || depth > 6) return null;
@@ -1223,10 +1168,6 @@ export default function ExecutePanel({
           return null;
         };
         const failedTxHash = findTxHash(e);
-        if (typeof console !== "undefined") {
-          if (failedTxHash) console.log("vault-fail tx hash:", failedTxHash);
-          else console.log("vault-fail tx hash: none found in error chain");
-        }
         // ANY vault failure shows the persistent card. The
         // fee-maturity pattern keeps its specific copy; everything else gets
         // the generic wrapper copy with the code and message inline.
@@ -1401,25 +1342,6 @@ export default function ExecutePanel({
                   ))}
                 </select>
               </label>
-              <label
-                className="field"
-                title="The wallet's paymaster sponsors every pool transaction by default. When its pre-flight keeps rejecting valid moves (error 156 with an empty reason), self-pay broadcasts the same transactions yourself — free test, hide, and vault move alike: gas comes from your visible STRK, no paymaster involved."
-              >
-                Sponsor my own gas (skip paymaster — all moves)
-                <input
-                  type="checkbox"
-                  checked={selfPay}
-                  onChange={(e) => setSelfPay(e.target.checked)}
-                  style={{ marginTop: 6 }}
-                />
-              </label>
-              {selfPay && (
-                <p className="status" style={{ marginTop: 6, maxWidth: 340 }}>
-                  Self-pay: needs ~3-4 visible STRK for gas. You have{" "}
-                  {visibleStrk != null ? `${(Number(visibleStrk) / 1e18).toFixed(2)}` : "?"}. The vault
-                  fee leg (6 STRK) still applies on top.
-                </p>
-              )}
               {delay?.verdict === "delay-earns-it" && !isRehearsal && delayBlocks < measuredDelayBlocks && (
                 <p className="status" style={{ marginTop: 6, maxWidth: 340 }}>
                   Timing model suggests {formatWaitLabel(measuredDelayBlocks, secondsPerBlock)} for
@@ -1881,7 +1803,7 @@ export default function ExecutePanel({
                 direction: "ltr",
               }}
             >
-              Paymaster rejection reasons:
+              Wallet reported:
               <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
                 {vaultErrorCard.paymasterErrors.map((s, idx) => (
                   <li key={idx} style={{ wordBreak: "break-word" }}>
@@ -1900,8 +1822,6 @@ export default function ExecutePanel({
                 if (typeof navigator !== "undefined" && navigator.clipboard) {
                   navigator.clipboard.writeText(vaultErrorCard.txHash).catch(() => {});
                 }
-                // Also surface it in the console — clipboard can silently fail.
-                if (typeof console !== "undefined") console.log("vault-fail tx hash:", vaultErrorCard.txHash);
                 say(`Copied tx hash: ${vaultErrorCard.txHash.slice(0, 18)}…`, "ok");
               }}
               style={{ marginLeft: 8 }}

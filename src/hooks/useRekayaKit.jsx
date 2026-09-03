@@ -307,12 +307,8 @@ export class RekayaKitConnector {
 
     try {
       await this.#call("wallet_disconnect", { wallet_id: target });
-    } catch (e) {
+    } catch {
       // best-effort: clear local session regardless of bridge response
-      console.warn(
-        "[RekayaKitConnector] disconnect bridge call failed, clearing local session:",
-        e
-      );
     } finally {
       if (target === this.#walletId) {
         this.#session = null;

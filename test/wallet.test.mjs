@@ -9,7 +9,6 @@ import {
   dryRun,
   ensureWalletChain,
   execute,
-  executeSelfPay,
   pickLandedPoolTx,
   resolveChainId,
   sameChain,
@@ -223,57 +222,18 @@ test("pickLandedPoolTx: wallet error + no matching activity -> null (failure car
   assert.equal(pickLandedPoolTx(null, 1200), null, "garbage scan -> null");
 });
 
-// ── 4L: self-pay broadcast (bypass the wallet's paymaster) ─────────────────
-test("executeSelfPay: prepares real proofs and broadcasts via executeWithProof", async () => {
-  const seen = { prepare: null, broadcast: null, simulate: null };
-  const account = {
-    strk20PrepareInvoke: async (actions, simulate) => {
-      seen.prepare = actions;
-      seen.simulate = simulate;
-      return { call: { contractAddress: "0xpool", entrypoint: "apply_actions", calldata: ["0x1"] }, proof: { notes: ["0xproof"] } };
-    },
-    executeWithProof: async (call, proof) => {
-      seen.broadcast = { call, proof };
-      return { transaction_hash: "0xabc" };
-    },
-  };
-  const tx = await executeSelfPay(account, [{ type: "deposit", token: "0x1", amount: "0x2" }]);
-  assert.equal(tx.transaction_hash, "0xabc");
-  assert.equal(seen.simulate, false, "must request REAL proofs (simulate=false)");
-  assert.equal(seen.broadcast.proof.notes[0], "0xproof", "proof must be forwarded to the broadcast");
-  assert.equal(seen.broadcast.call.entrypoint, "apply_actions");
+
+// ── relay-only send path (self-pay removed: Argent rejects proof submissions
+//    outside wallet_strk20InvokeTransaction) ────────────────────────────────
+test("execute: routes through the wallet's STRK20 relay", async () => {
+  const account = { strk20InvokeTransaction: async () => ({ transaction_hash: "0xrelay" }) };
+  const tx = await execute(account, [{ type: "transfer", token: "0x1", amount: "0x1", recipient: "0x2" }]);
+  assert.equal(tx.transaction_hash, "0xrelay");
 });
 
-test("executeSelfPay: empty prepared call is refused before broadcast", async () => {
-  const account = {
-    strk20PrepareInvoke: async () => ({ call: { calldata: [] }, proof: null }),
-    executeWithProof: async () => {
-      throw new Error("should not be reached");
-    },
-  };
-  await assert.rejects(executeSelfPay(account, [{ type: "deposit", token: "0x1", amount: "0x2" }]), /empty self-pay call/);
-});
-
-// ── 4N: self-pay routing on every send path ────────────────────────────────
-test("execute router: selfPay=false relays, selfPay=true self-pays", async () => {
-  const calls = [];
-  const account = {
-    strk20InvokeTransaction: async () => calls.push("relayed") && { transaction_hash: "0xrelay" },
-    strk20PrepareInvoke: async () => calls.push("prepare") && { call: { calldata: ["0x1"] }, proof: "p" },
-    executeWithProof: async () => calls.push("selfpay") && { transaction_hash: "0xself" },
-  };
-  const actions = [{ type: "transfer", token: "0x1", amount: "0x1", recipient: "0x2" }];
-  const relayed = await execute(account, actions, { selfPay: false });
-  assert.equal(relayed.transaction_hash, "0xrelay", "default routes to the paymaster relay");
-  const selfPaid = await execute(account, actions, { selfPay: true });
-  assert.equal(selfPaid.transaction_hash, "0xself", "selfPay routes to executeWithProof");
-  assert.deepEqual(calls, ["relayed", "prepare", "selfpay"], "each path used exactly its own machinery");
-});
-
-test("dryRun: selfPay mode prepares REAL proofs (simulate=false)", async () => {
+test("dryRun: always simulate-mode prepare (free, no broadcast)", async () => {
   const seen = [];
   const account = { strk20PrepareInvoke: async (a, simulate) => (seen.push(simulate), {}) };
   await dryRun(account, [{ type: "transfer", token: "0x1", amount: "0x1", recipient: "0x2" }]);
-  await dryRun(account, [{ type: "transfer", token: "0x1", amount: "0x1", recipient: "0x2" }], { selfPay: true });
-  assert.deepEqual(seen, [true, false], "default = simulate; selfPay = real-proof prepare");
+  assert.deepEqual(seen, [true], "simulate=true always");
 });

@@ -24,7 +24,6 @@ const grab = (name) => {
   return src.slice(start, end);
 };
 const extractDetailedErrors = new Function(`${grab("extractDetailedErrors")}; return extractDetailedErrors;`)();
-const serializeWalletError = new Function(`${grab("serializeWalletError")}; return serializeWalletError;`)();
 
 test("extractDetailedErrors: string cause (the Argent 163 shape) is captured, not skipped", () => {
   // The exact shape the user's console showed: errorMessages exists but the
@@ -42,18 +41,6 @@ test("extractDetailedErrors: string cause (the Argent 163 shape) is captured, no
     out.some((s) => s.includes("Paymaster error 156")),
     `string cause must be captured, got: ${JSON.stringify(out)}`,
   );
-});
-
-test("serializeWalletError: string cause serializes as the string, not [depth limit]", () => {
-  const e = { name: "ln", message: "UNKNOWN", code: 163, cause: "some real reason text" };
-  const out = serializeWalletError(e);
-  assert.equal(out.cause, "some real reason text");
-});
-
-test("serializeWalletError: errorMessages value is visible, not just the key", () => {
-  const e = { name: "x", message: "y", code: 1, errorMessages: ["reason one", "reason two"] };
-  const out = serializeWalletError(e);
-  assert.deepEqual(out.errorMessages, ["reason one", "reason two"]);
 });
 
 test("extractDetailedErrors: object causes still work (no regression)", () => {
