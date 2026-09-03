@@ -1,7 +1,7 @@
 // Vercel serverless proxy for Starknet JSON-RPC POSTs.
 //
 // Public Starknet RPCs (Lava, drpc, ...) block direct browser POSTs via CORS,
-// which killed Deep Simulate's raw-RPC path in the deployed app. This endpoint
+// which killed the app's raw-RPC calls in the deployed app. This endpoint
 // forwards the request server-side, where CORS does not apply, and returns the
 // node's JSON response with permissive CORS headers so the SPA can call it.
 //
