@@ -4,6 +4,7 @@ import {
   NOTE_MATURITY_BLOCKS,
   delayFrontier,
   formatDelay,
+  formatWaitLabel,
   poolTransactionBlocks,
   recommendDelay,
   temporalCohort,
@@ -114,4 +115,12 @@ test("delays are formatted at a sane scale", () => {
   assert.equal(formatDelay(20000, 1.73), "9.6 h");
   assert.equal(formatDelay(200000, 1.73), "4.0 days");
   assert.equal(formatDelay(1000, null), "1000 blocks");
+});
+
+test("wait labels carry a time estimate only when block time is known", () => {
+  assert.equal(formatWaitLabel(10, 1.73), "10 blocks (~17s)");
+  assert.equal(formatWaitLabel(1000, 1.73), "1,000 blocks (~29 min)");
+  // No measured block time: never echo the block count back as an estimate.
+  assert.equal(formatWaitLabel(10, null), "10 blocks");
+  assert.equal(formatWaitLabel(1000, null), "1,000 blocks");
 });

@@ -11,6 +11,7 @@ import { loadPoolState } from "./lib/pool-state.mjs";
 import {
   delayFrontier,
   formatDelay,
+  formatWaitLabel,
   recommendDelay,
 } from "./lib/timing.mjs";
 
@@ -412,8 +413,10 @@ export default function App() {
             <div className="num">03</div>
             <h3>Privacy has a fee</h3>
             <p>
-              Each step costs a flat fee (now 6 STRK). To keep two steps unlinkable you pay it twice.
-              Splitting a small position can cost more than it protects.
+              Each step costs a flat fee (now{" "}
+              {state.status === "ready" && state.fee != null ? strk(state.fee) : "6"} STRK). To keep
+              two steps unlinkable you pay it twice. Splitting a small position can cost more than
+              it protects.
             </p>
           </div>
           <div className="card">
@@ -684,21 +687,24 @@ export default function App() {
           <p className="lede">
             Splitting hides the <b>amount</b>. Waiting hides the <b>timing</b>: it only works if
             someone else uses the pool while you wait. We checked the last{" "}
-            {TIMING_SAMPLE_BLOCKS.toLocaleString()} blocks (~{formatDelay(TIMING_SAMPLE_BLOCKS, state.secondsPerBlock)}).
-            The pool has {timing.total.toLocaleString()} moves ever, {timing.recent.toLocaleString()}{" "}
-            recently; old bursts don&apos;t count for today.
+            {TIMING_SAMPLE_BLOCKS.toLocaleString()} blocks
+            {state.secondsPerBlock != null
+              ? ` (~${formatDelay(TIMING_SAMPLE_BLOCKS, state.secondsPerBlock)})`
+              : ""}
+            . The pool has {timing.total.toLocaleString()} pool transactions ever,{" "}
+            {timing.recent.toLocaleString()} recently; old bursts don&apos;t count for today.
           </p>
 
           <div className={`verdict ${timing.rec.verdict}`}>
             <h3>
               {timing.rec.verdict === "delay-earns-it"
-                ? `Wait about ${formatDelay(timing.rec.window, state.secondsPerBlock)} between hiding and entering the vault.`
+                ? `Wait about ${formatWaitLabel(timing.rec.window, state.secondsPerBlock)} between hiding and entering the vault.`
                 : "This pool is quiet: timing won't hide you much right now."}
             </h3>
             <p>
               {timing.rec.verdict === "delay-earns-it"
                 ? `That's ${timing.rec.window.toLocaleString()} blocks. At that wait, a move usually has ${timing.rec.medianCohort} others nearby, alone only ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time.`
-                : `Even waiting ${formatDelay(timing.rec.window, state.secondsPerBlock)} leaves you alone ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time; the amount split is doing more work than the wait.`}
+                : `Even waiting ${formatWaitLabel(timing.rec.window, state.secondsPerBlock)} leaves you alone ${(timing.rec.aloneShare * 100).toFixed(0)}% of the time; the amount split is doing more work than the wait.`}
               {timing.floor && (
                 <>
                   {" "}
@@ -731,7 +737,7 @@ export default function App() {
                           <span className="pill">minimum</span>
                         )}
                       </td>
-                      <td>{formatDelay(r.window, state.secondsPerBlock)}</td>
+                      <td>{state.secondsPerBlock != null ? formatDelay(r.window, state.secondsPerBlock) : "—"}</td>
                       <td>{r.medianCohort}</td>
                       <td>{(r.aloneShare * 100).toFixed(0)}%</td>
                     </tr>

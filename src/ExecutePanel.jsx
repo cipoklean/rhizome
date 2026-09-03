@@ -10,7 +10,7 @@ import {
   writeExecutionProgress,
 } from "./lib/execution.mjs";
 import { connect } from "./lib/pool.mjs";
-import { NOTE_MATURITY_BLOCKS, formatDelay } from "./lib/timing.mjs";
+import { NOTE_MATURITY_BLOCKS, formatDelay, formatWaitLabel } from "./lib/timing.mjs";
 import { formatUnits, parseUnits } from "./lib/units.mjs";
 import {
   OPERATION,
@@ -163,7 +163,6 @@ export default function ExecutePanel({
   // a note younger than NOTE_MATURITY_BLOCKS, so the shortest offered wait is
   // that floor — anything lower would show "ready" while the contract reverts.
   const [waitBlocks, setWaitBlocks] = useState(NOTE_MATURITY_BLOCKS);
-  const WAIT_OPTIONS = [NOTE_MATURITY_BLOCKS, 15, 20, 25, 30];
   const [legs, setLegs] = useState({});
   const [hydratedProgressKey, setHydratedProgressKey] = useState(null);
   // Landing block of the most recent hide seen by this app (any leg). The fee
@@ -191,12 +190,19 @@ export default function ExecutePanel({
   const strkToken = net.tokens?.STRK ?? token;
   const measuredDelayBlocks = Math.max(NOTE_MATURITY_BLOCKS, delay?.window ?? NOTE_MATURITY_BLOCKS);
   const isRehearsal = network === "sepolia" && delayMode === "rehearsal";
+  // Waits offered between hide and vault: the spendability floor, quick steps,
+  // and the timing model's own windows, so its suggestion is always selectable
+  // instead of a number the dropdown can't reach.
+  const WAIT_OPTIONS = [
+    ...new Set([NOTE_MATURITY_BLOCKS, 15, 20, 25, 30, 50, 200, 1000, 5000, measuredDelayBlocks]),
+  ].sort((a, b) => a - b);
   // The wait the user actually gets: their chosen blocks, floored at the pool's
-  // spendability maturity (younger notes revert) and capped at 30. The timing
-  // model's suggestion is a hint only — it must never force an unusable wait.
+  // spendability maturity (younger notes revert) and capped at the longest
+  // offered wait. The timing model's suggestion is a hint only — it must never
+  // force an unusable wait.
   const delayBlocks = isRehearsal
     ? NOTE_MATURITY_BLOCKS
-    : Math.min(30, Math.max(NOTE_MATURITY_BLOCKS, waitBlocks));
+    : Math.min(WAIT_OPTIONS[WAIT_OPTIONS.length - 1], Math.max(NOTE_MATURITY_BLOCKS, waitBlocks));
   // 4J-REV: visible STRK alongside shielded, read through the 4G proxy.
   // Fails open — unknown balance renders "· Visible: ?" and never blocks.
   const visibleReqWei = visibleRequirement(net.observed?.feeAmountWei);
@@ -523,7 +529,7 @@ export default function ExecutePanel({
       } catch {}
       return next;
     });
-    say(`Piece ${i + 1} hidden at block ${at}. Enter the vault in ${delayBlocks} blocks (${formatDelay(delayBlocks, secondsPerBlock)}).`, "ok");
+    say(`Piece ${i + 1} hidden at block ${at}. Enter the vault in ${formatWaitLabel(delayBlocks, secondsPerBlock)}.`, "ok");
     return true;
   }
 
@@ -1360,6 +1366,10 @@ export default function ExecutePanel({
   }
 
   const strk = (v) => formatUnits(v, 18, { maxFractionDigits: 4 });
+  // Fee copy is derived from the same numbers the pre-flight gate enforces, so
+  // the warning tracks the network's actual fee (2 STRK on Sepolia, 6 on mainnet).
+  const feePerStep = fee != null ? fee : BigInt(net.observed?.feeAmountWei ?? "6000000000000000000");
+  const visibleBills = `Visible STRK pays the bills: each hide burns ~3-4 STRK gas; the vault move needs ≥ ~${(Number(visibleReqWei) / 1e18).toFixed(1)} visible (${strk(feePerStep)} STRK fee + ~3.2 gas). Shielded STRK cannot pay for either.`;
   // Starkscan is the standard Starknet explorer and honours ?chain= so the
   // same link resolves on mainnet or Sepolia.
   const explorerChain = net.chainId === "SN_MAIN" ? "mainnet" : net.chainId === "SN_SEPOLIA" ? "sepolia" : "mainnet";
@@ -1410,7 +1420,7 @@ export default function ExecutePanel({
     }
     const left = blocksLeft(i);
     if (left == null) return { label: "hidden", done: false };
-    if (left > 0) return { label: `wait ${left} blocks (${formatDelay(left, secondsPerBlock)})`, done: false, waiting: true };
+    if (left > 0) return { label: `wait ${formatWaitLabel(left, secondsPerBlock)}`, done: false, waiting: true };
     return {
       label: leg.investDryRun
         ? "ready for vault"
@@ -1439,7 +1449,7 @@ export default function ExecutePanel({
         <b>enter the vault</b>. Rhizome only describes the moves; your wallet holds the keys and does
         the proving.
         {feePlan && <> This plan is {feePlan.legCount} piece{feePlan.legCount === 1 ? "" : "s"} · fee {strk(feePlan.executionFees)} STRK to hide.</>}
-        {delay && !isRehearsal && <> Wait {formatDelay(delayBlocks, secondsPerBlock)} between hide and vault.</>}
+        {delay && !isRehearsal && <> Wait {formatWaitLabel(delayBlocks, secondsPerBlock)} between hide and vault.</>}
       </p>
 
             {ready && (
@@ -1469,10 +1479,16 @@ export default function ExecutePanel({
             <div className="controls" style={{ marginTop: 0 }}>
               <label className="field">
                 Wait before vault
-                <select value={String(waitBlocks)} onChange={(e) => setWaitBlocks(Number(e.target.value))}>
+                <select
+                  value={String(WAIT_OPTIONS.includes(waitBlocks) ? waitBlocks : NOTE_MATURITY_BLOCKS)}
+                  onChange={(e) => setWaitBlocks(Number(e.target.value))}
+                >
                   {WAIT_OPTIONS.map((b) => (
                     <option key={b} value={String(b)}>
-                      {b} blocks (~{formatDelay(b, secondsPerBlock)})
+                      {formatWaitLabel(b, secondsPerBlock)}
+                      {b === measuredDelayBlocks && delay?.verdict === "delay-earns-it"
+                        ? " · suggested"
+                        : ""}
                     </option>
                   ))}
                 </select>
@@ -1496,9 +1512,11 @@ export default function ExecutePanel({
                   fee leg (6 STRK) still applies on top.
                 </p>
               )}
-              {delay && !isRehearsal && (
-                <p className="status" style={{ marginTop: 6, maxWidth: 320 }}>
-                  Timing model suggests {measuredDelayBlocks.toLocaleString()} blocks for cover; you chose {waitBlocks}. Shorter waits mean thinner cover — your call.
+              {delay?.verdict === "delay-earns-it" && !isRehearsal && delayBlocks < measuredDelayBlocks && (
+                <p className="status" style={{ marginTop: 6, maxWidth: 340 }}>
+                  Timing model suggests {formatWaitLabel(measuredDelayBlocks, secondsPerBlock)} for
+                  cover; you chose {formatWaitLabel(delayBlocks, secondsPerBlock)}. Shorter waits
+                  mean thinner cover — your call.
                 </p>
               )}
               {!wallets && (
@@ -1532,7 +1550,7 @@ export default function ExecutePanel({
               </div>
             )}
             {wallets && !ready && <p className="status" style={{ marginTop: 8 }}>Approve Rhizome in your wallet to continue.</p>}
-            {block != null && <p className="status" style={{ marginTop: 6 }}>Current block {block.toLocaleString()} · wait {delayBlocks} blocks = {formatDelay(delayBlocks, secondsPerBlock)}</p>}
+            {block != null && <p className="status" style={{ marginTop: 6 }}>Current block {block.toLocaleString()} · wait {formatWaitLabel(delayBlocks, secondsPerBlock)}</p>}
             {isRehearsal && <p className="status" style={{ marginTop: 6, color: "var(--orange)" }}>Quick test skips the real wait; don&apos;t use it on mainnet.</p>}
           </div>
         </div>
@@ -1629,7 +1647,7 @@ export default function ExecutePanel({
             {schedule?.length > 0 ? (
               <p>
                 {schedule.length} piece{schedule.length === 1 ? "" : "s"}; each hidden amount stays exactly as shown so it keeps its cover. Wait{" "}
-                {formatDelay(delayBlocks, secondsPerBlock)} between hide and vault.
+                {formatWaitLabel(delayBlocks, secondsPerBlock)} between hide and vault.
               </p>
             ) : (
               <p className="status">No pieces yet, pick an amount.</p>
@@ -1644,9 +1662,7 @@ export default function ExecutePanel({
                   lineHeight: 1.5,
                 }}
               >
-                Visible STRK pays the bills: each hide burns ~3-4 STRK gas; the
-                vault move needs ≥ ~9.2 visible (6 STRK fee + ~3.2 gas).
-                Shielded STRK cannot pay for either.
+                {visibleBills}
               </p>
             )}
 
@@ -1749,7 +1765,7 @@ export default function ExecutePanel({
                                   color: "var(--warn, #b8860b)",
                                   lineHeight: 1.4,
                                 }}
-                                title="Visible STRK pays the bills: each hide burns ~3-4 STRK gas; the vault move needs ≥ ~9.2 visible (6 STRK fee + ~3.2 gas). Shielded STRK cannot pay for either."
+                                title={visibleBills}
                               >
                                 hides burn ~3-4 visible STRK gas
                               </span>
@@ -1888,9 +1904,9 @@ export default function ExecutePanel({
             A shielded note is too young to spend.
           </p>
           <p style={{ margin: "8px 0 10px", fontSize: 13 }}>
-            It matures in ~{maturityGate.blocked ? maturityGate.blocksRemaining : 0} blocks (~
-            {formatDelay(maturityGate.blocked ? maturityGate.blocksRemaining : 0, secondsPerBlock)}).
-            The dry run can&apos;t detect this — simulation charges no real fee.
+            It matures in ~
+            {formatWaitLabel(maturityGate.blocked ? maturityGate.blocksRemaining : 0, secondsPerBlock)}
+            . The dry run can&apos;t detect this — simulation charges no real fee.
           </p>
           <button
             type="button"
