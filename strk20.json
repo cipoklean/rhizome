@@ -1,15 +1,64 @@
 {
-  "transactions": [],
+  "transactions": [
+    {
+      "name": "First mainnet hide (15 STRK leg)",
+      "network": "mainnet",
+      "hash": "0x1ce75a2736e64d7bd933765d3e2f0c1af944664139636f6ec9b603865efc4ca",
+      "status": "SUCCEEDED",
+      "block": 14149219,
+      "note": "Real STRK shielded into the privacy pool through the app's own anonymizer. Fee paid from the visible balance."
+    },
+    {
+      "name": "Second mainnet hide (15 STRK leg)",
+      "network": "mainnet",
+      "hash": "0x75d453d30b5866a5643d8e7706b2a5a270bfa0ce1cd8a5ec20ddde6bc1cb8b7",
+      "status": "SUCCEEDED",
+      "block": 14149197,
+      "note": "Second tranche of the same plan. Landed SUCCEEDED on-chain even though the wallet UI misreported it as failed at the time, which drove the app's wallet-error reconciliation feature."
+    },
+    {
+      "name": "Largest single-leg mainnet hide (43 STRK)",
+      "network": "mainnet",
+      "hash": "0x3a770fe0820dcf2aae8d9c666583c9582ed99a140aae128a0d1f5ff2fc965d0",
+      "status": "SUCCEEDED",
+      "block": 14165469,
+      "note": "Biggest single-leg hide to date, executed end-to-end through the app: analysis, tranche plan, wait-out-delay, wallet STRK20 relay."
+    }
+  ],
   "contracts": [
     {
-      "name": "RhizomeVesuAnonymizer",
+      "name": "RhizomeVesuAnonymizer (mainnet)",
+      "network": "mainnet",
+      "address": "0x2c41ed90c6a399042cad69ce6e2435086d7f6140db592ee5241c67ced601dfa",
+      "class_hash": "0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a",
+      "source": "contracts/src/lib.cairo",
+      "note": "privacy_invoke helper for Vesu vault deposit and withdraw. Adapted from StarkWare's reference vesu_lending_anonymizer. Unaudited. Deployed on mainnet with --confirm; verify:facts checks this class hash against the class committed in artifacts/, so the reviewed bytecode and the deployed bytecode are provably the same."
+    },
+    {
+      "name": "RhizomeVesuAnonymizer (sepolia)",
       "network": "sepolia",
       "address": "0x552d747e90eb70e52e9c5f9d9150b97e46ac9b25989a36e7eee96a2e45c5e20",
       "class_hash": "0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a",
       "source": "contracts/src/lib.cairo",
-      "note": "privacy_invoke helper for Vesu vault deposit and withdraw. Adapted from StarkWare's reference vesu_lending_anonymizer. Unaudited. `npm run verify:facts` checks this class hash against the class committed in artifacts/, so the reviewed bytecode and the deployed bytecode are provably the same."
+      "note": "Same reviewed class as mainnet, deployed to sepolia for rehearsal. Unaudited."
+    },
+    {
+      "name": "STRK20 privacy pool (mainnet)",
+      "network": "mainnet",
+      "address": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+      "class_hash": "0x67dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d",
+      "source": "third-party (Strakverse STRK20 pool)",
+      "note": "The STRK20 shielded-pool this app hides into. Read-only for the app: the app never holds keys or proofs; the wallet (Argent X) generates all zero-knowledge proofs."
+    },
+    {
+      "name": "STRK20 privacy pool (sepolia)",
+      "network": "sepolia",
+      "address": "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+      "class_hash": "0x7e2bbd7ccc1e68b2695caef70aeb2a3be6cd017b5d5159278ba08f2d8de33f",
+      "source": "third-party (Strakverse STRK20 pool)",
+      "note": "Rehearsal pool on sepolia, same STRK20 interface."
     }
   ],
   "demo_video": "",
-  "demo_url": ""
+  "demo_url": "https://rhizome-indol.vercel.app"
 }
