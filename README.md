@@ -9,7 +9,7 @@ STRK20 privacy pool on Starknet mainnet.
 
 The STRK20 pool hides *who*. It does not hide *how much* or *when*.
 
-Deposits and withdrawals are public ERC-20 legs — address, token, amount. Private DeFi routes
+Deposits and withdrawals are public ERC-20 legs: address, token, amount. Private DeFi routes
 through shared anonymizer contracts into public venues, so a swap or a lending deposit exposes
 its amount and its timing. The protocol documentation is explicit that this is unsolved:
 
@@ -20,8 +20,8 @@ over time. The obvious fix is also expensive, and it is more expensive than it f
 
 ## What the fee actually is
 
-The pool charges a flat fee **per `apply_actions` call** — once per pool transaction, whatever
-that transaction does — and always in **STRK**, whichever token you are shielding. Verified in
+The pool charges a flat fee **per `apply_actions` call** (once per pool transaction, whatever
+the transaction does) and always in **STRK**, whichever token you are shielding. Verified in
 the protocol source and on mainnet receipts:
 
 ```cairo
@@ -46,7 +46,7 @@ Three consequences the earlier version of this README got wrong:
 2. **It is settled by an extra public withdrawal.** A fee router fronts the fee to the collector
    and the pool reimburses it, in the same transaction, with a `Withdrawal` of exactly the fee
    amount. Every priced pool transaction therefore emits a public withdrawal leg that belongs to
-   nobody's position. On mainnet those legs are **76.1%** of all public STRK withdrawals — so any
+   nobody's position. On mainnet those legs are **76.1%** of all public STRK withdrawals, so any
    exit-side analysis that does not filter them is three-quarters noise.
 3. **The fee has changed, twice.** It ran at zero until block 9,079,357, then 4 STRK, then 6 STRK
    from block 12,806,094. Nothing in this repo hardcodes it; `npm run verify:facts` re-reads the
@@ -54,18 +54,18 @@ Three consequences the earlier version of this README got wrong:
 
 ## What Rhizome does
 
-Rhizome treats unlinkability as something with a price, and computes it — in STRK on one axis and
+Rhizome treats unlinkability as something with a price, and computes it: in STRK on one axis and
 in patience on the other.
 
 1. **Reads the live fee and its history** from the pool rather than assuming it.
-2. **Reads both public legs** — the pool's own `Deposit` *and* `Withdrawal` events — to find
+2. **Reads both public legs** (the pool's own `Deposit` *and* `Withdrawal` events) to find
    amounts that blend in rather than stand out, after excluding fee reimbursement.
 3. **Scores every amount on its weaker side.** An attacker who cannot place your deposit will
    place your withdrawal instead, and only needs one of them.
 4. **Computes the frontier**: for a given position size, what tranche count buys meaningful
-   unlinkability, and what it costs in fees — priced per pool transaction, with the full round
+   unlinkability, and what it costs in fees, priced per pool transaction, with the full round
    trip shown alongside. Sometimes the honest answer is "one tranche".
-5. **Prices the delay too**, from the pool's own traffic — because the extra fee you pay to
+5. **Prices the delay too**, from the pool's own traffic, because the extra fee you pay to
    separate a shield from the venue action it funds buys nothing if nothing else happens in
    between.
 6. **Executes the chosen schedule** through its own anonymizer contract: shield the chosen amount,
@@ -78,12 +78,12 @@ Existing privacy-preflight tools tell a user they leaked. Rhizome prices the fix
 
 ## The cover that costs nothing, and mostly isn't there
 
-Splitting a position is expensive. Waiting is free — so the free axis should be spent first. Except
+Splitting a position is expensive. Waiting is free, so the free axis should be spent first. Except
 you cannot spend what the pool does not have.
 
 Every priced pool transaction emits exactly one fee-reimbursement withdrawal, which makes those
 legs a census of pool transactions. Measured over the most recent 500,000 blocks, at the measured
-block time of **1.73s** (not the 30s the ecosystem's older docs imply — that changes every
+block time of **1.73s** (not the 30s the ecosystem's older docs imply. That changes every
 "how long must I wait" answer by an order of magnitude):
 
 | delay | wait | other pool tx (median) | alone |
@@ -101,7 +101,7 @@ observer looking for "the deposit that funded this vault action" has exactly one
 not need to look at amounts.
 
 That is the sharpest thing in this repo, and it cuts against its own product: the second pool
-transaction per leg — 6 STRK, the thing the fee model exists to charge for — is **wasted** unless
+transaction per leg (6 STRK, the thing the fee model exists to charge for) is **wasted** unless
 you also wait. Rhizome asks for 5,000 blocks, about two and a half hours, which is where the median
 transaction picks up 11 others and is alone only 2% of the time. That costs nothing, and no fee
 schedule substitutes for it.
@@ -151,7 +151,7 @@ pool transactions per leg:
 |   10 |      20 |      120 | 0.24% |           28 |           8 |           8 |
 |   13 |      26 |      156 | 0.31% |           28 |          11 |          11 |
 
-Thirteen legs — twelve of 4,000 and one of 2,000 — costs 156 STRK to enter, 0.31% of the
+Thirteen legs (twelve of 4,000 and one of 2,000) costs 156 STRK to enter, 0.31% of the
 position, and 312 STRK across the round trip. Nothing affordable reaches the target cover, so
 Rhizome says so rather than dressing the best available up as sufficient.
 
@@ -187,11 +187,25 @@ can create it.
 ## Status
 
 Early. The analysis layer is complete and measured against mainnet. Execution is wired as a
-two-stage runner per leg — shield, wait out the measured delay, then invoke the vault. The
-canonical `transfer OPEN + invoke` vault action passed a free Ready dry run against the
-wallet-discoverable Sepolia mock; no paid pool transaction was sent.
+two-stage runner per leg: shield, wait out the measured delay, then invoke the vault.
 
-Paid execution now fails closed on fee funding. Preserving the cohort amount `D` on both public
+Paid hides ran for real on mainnet through the app's own anonymizer contract. Ten pool
+transactions from the operator account have landed SUCCEEDED to date, every leg as its
+own note. The four largest, verifiable on any Starknet explorer:
+
+```
+0x1ce75a2736e64d7bd933765d3e2f0c1af944664139636f6ec9b603865efc4ca  block 14149219
+0x75d453d30b5866a5643d8e7706b2a5a270bfa0ce1cd8a5ec20ddde6bc1cb8b7  block 14149197
+0x3a770fe0820dcf2aae8d9c666583c9582ed99a140aae128a0d1f5ff2fc965d0  block 14165469
+0x5ad732adc58076068fc864cf2b772ed7f85035f8f8422f69528e17cf9dc1cc5  block 14319589
+```
+
+The vault leg is rehearsed on Sepolia's mock venue and its action shape passes the free
+dry run against the mainnet pool. Sending the paid vault move depends on the wallet's
+STRK20 relayer, which was rejecting proof submissions at the time of writing
+(documented below).
+
+Paid execution fails closed on fee funding. Preserving the cohort amount `D` on both public
 legs needs a separate shielded STRK reserve of `2 × fee × legs`. Ready must share a balance that
 verifies that reserve before either paid stage can submit. For a fresh account, bootstrapping a net
 reserve `R` requires one separate public deposit of `R + fee`, because that bootstrap transaction
@@ -200,20 +214,19 @@ also reimburses one pool fee.
 | | |
 | --- | --- |
 | Sepolia anonymizer | `0x552d747e90eb70e52e9c5f9d9150b97e46ac9b25989a36e7eee96a2e45c5e20` |
-| Sepolia class hash | `0x3c8a10f6d3c5f57a93ce5b132a08e30015282fd158e3dcf6986625bc0c9446a` |
-| Mainnet anonymizer | not deployed |
+| Mainnet anonymizer | `0x2c41ed90c6a399042cad69ce6e2435086d7f6140db592ee5241c67ced601dfa` |
 
 The accepted vault leg is the two-action `transfer` with `amount: "OPEN"`, then `invoke` request.
 It is the documented private-DeFi shape and passed a Ready simulation against the configured
 Sepolia anonymizer and metadata-capable mock vault. The unneeded experimental explicit-withdraw
-variant has been removed; the exact request remains visible in the UI for free re-verification.
+variant has been removed; tests pin the exact request shape.
 
 `npm run verify:facts` checks the deployed class hash against the class committed in
 `artifacts/`, so the reviewed bytecode and the deployed bytecode are provably the same.
 
 ## Stack
 
-- Starknet Wallet API via `starknet.js` `WalletAccountV6` — the dapp never touches a viewing key
+- Starknet Wallet API via `starknet.js` `WalletAccountV6`; the dapp never touches a viewing key
 - `@starknet-io/get-starknet-discovery` / `-wallet-standard` 6.0.3, `@starknet-io/types-js` 0.10.3
 - A Cairo `privacy_invoke` anonymizer contract (owned and reviewed here, not audited)
 
@@ -226,8 +239,9 @@ npm run build      # production build to dist/
 npm test           # node --test on the privacy/execution/timing/wallet suites
 ```
 
-The dapp is client-only: it reads public pool data over RPC and never holds a
-private key. Point it at `?network=sepolia` for the free rehearsal path.
+The dapp is a static client: it reads public pool data over RPC and never holds a
+private key. A tiny serverless proxy (`api/simulate.js`) relays those reads to
+dodge browser CORS blocks. It holds no keys and stores nothing. Point it at `?network=sepolia` for the free rehearsal path.
 
 ## How to demo
 
@@ -237,7 +251,8 @@ private key. Point it at `?network=sepolia` for the free rehearsal path.
    split, the fee, and how many others share your weakest leg.
 3. Press `?` for the shortcuts + glossary (cohort / distinctiveness / frontier).
 4. Step 3 runs a free wallet dry run (no fee, no transaction). On success a
-   transient `✓ passed` chip appears. Real Hide unlocks only after it passes.
+   transient `✓ passed` chip appears. Hide needs either that pass or existing
+   shielded notes already on-chain: balances you already have prove the flow.
 5. If the RPC is down, the status banner says so plainly and still shows the
    last snapshot — planning works, execution re-checks live data on connect.
 
